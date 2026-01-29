@@ -1,0 +1,1 @@
+Directory for external data required for analysis. Typically, external data would be downloaded to here using R markdown notebook and not actually form part of the repository to save unnecessary duplication of data. 

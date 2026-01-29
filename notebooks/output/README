@@ -1,0 +1,1 @@
+Directory for intermediate files from R markdown notebooks. Typically, these would be saved in .rds format and not form part of the repository.
