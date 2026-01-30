@@ -459,10 +459,15 @@ Save the protein quantification in wide format
 
 ```{r}
 
-
-results_dir <- here('results')
-
 protein_wide_format <- assay(qfs$total[['protein']]) 
+
+# Set column names to be condition_replicate
+colnames(protein_wide_format) <- sprintf(
+  '%s_%s', colData(qfs$total[['protein']])$condition,
+  colData(qfs$total[['protein']])$replicate)
+
+# Order columns alphabetically
+protein_wide_format <- protein_wide_format[,order(colnames(protein_wide_format))]
 
 protein_wide_format <- protein_wide_format %>%
   data.frame() %>%
@@ -470,7 +475,7 @@ protein_wide_format <- protein_wide_format %>%
 
 
 write.table(protein_wide_format,
-            file = here(results_dir, 'PROTAC_wide_format_protein.tsv'),
+            file = here('results/PROTAC_wide_format_protein.tsv'),
             quote=FALSE, row.names=FALSE, sep='\t')
 ```
 
@@ -510,8 +515,10 @@ long_format_protein <- get_long_format_exp(qfs$total[,,'protein']) %>%
 
 saveRDS(long_format_protein, here(output_dir, 'PROTAC_long_format_protein.rds'))
 
-write.table(long_format_protein,
-            file = here(results_dir, 'PROTAC_long_format_protein.tsv'),
+long_format_protein %>%
+  select(UniprotID, Gene.Names, Gene.Names.First, Protein.names=Protein.names.y,
+         condition, replicate, abundance) %>%
+  write.table(file = here('results/PROTAC_long_format_protein.tsv'),
             quote=FALSE, row.names=FALSE, sep='\t')
 
 long_format_phospho <- get_long_format_exp(
@@ -522,8 +529,11 @@ long_format_phospho <- get_long_format_exp(
 
 saveRDS(long_format_phospho, here(output_dir, 'PROTAC_long_format_phospho.rds'))
 
-write.table(long_format_phospho,
-            file = here(results_dir, 'PROTAC_long_format_phospho.tsv'),
+long_format_phospho %>%
+  select(UniprotID=Leading.razor.protein, phosphopeptide, ptm_positions_prot,
+         Gene.Names, Gene.Names.First, Protein.names=Protein.names.y,
+         condition, replicate, abundance) %>%
+write.table(file = here('results/PROTAC_long_format_phospho.tsv'),
             quote=FALSE, row.names=FALSE, sep='\t')
 
 

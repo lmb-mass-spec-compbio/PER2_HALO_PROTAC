@@ -347,6 +347,8 @@ ggsave(plot=p2, here('results/plots/PROTAC_AKT1S1_phosphosite_changes.pdf'))
 
 ```{r}
 phospho_limma_results %>%
+  select(UniprotID, phosphosite, phospho_pos, logFC, P.Value, adj.P.Val,
+         Protein.names=Protein.names.y, Gene.Names, Gene.Names.First, site_seq) %>%
   write.table(here('results/PROTAC_phospho_limma_results.tsv'),
               sep='\t', row.names=FALSE, quote=FALSE)
 ```

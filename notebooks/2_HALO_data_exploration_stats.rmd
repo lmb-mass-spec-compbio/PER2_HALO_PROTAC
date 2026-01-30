@@ -138,9 +138,11 @@ long_protein_inc_std_error <- merge(
   by.y=c('sample', 'UniprotID')) 
 
 # Save long format protein quantification with standard errors
-write.table(long_protein_inc_std_error,
-            file = here('results/HALO_long_format_protein.tsv'),
-            quote=FALSE, row.names=FALSE, sep='\t')
+long_protein_inc_std_error %>%
+  mutate(any_pep_quant=!is.imputed) %>%
+  select(Leading.razor.protein, Gene.Names.First, condition, replicate, abundance=value, std_error, any_pep_quant) %>%
+  write.table(file = here('results/HALO_long_format_protein.tsv'),
+              quote=FALSE, row.names=FALSE, sep='\t')
 
 # We can now delete the temp SE
 lfq_qf[['protein_sum']] <- NULL
@@ -301,8 +303,8 @@ ggsave(here(plots_dir, 'limpa_volcano_per2h_vs_halo.pdf'))
 
 limpa_results %>%
   select(Leading.razor.protein, Entry.Name, Protein.names, Gene.Names=Gene.Names.y,
-         Gene.Names.First, NPeptides, PropObs, logFC, CI.L, CI.R, AveExpr,
-         t, P.Value, adj.P.Val) %>%
+         Gene.Names.First, NPeptides, logFC, CI.L, CI.R, AveExpr,
+         P.Value, adj.P.Val) %>%
   write.table(here('results/HALO_limpa_results.tsv'), sep='\t',
               row.names=FALSE, quote=FALSE)
 ```
