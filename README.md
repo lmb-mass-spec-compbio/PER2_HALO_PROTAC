@@ -1,12 +1,10 @@
-# Update this text!!!
+# PER2-HALO and PER2-PROTAC proteomics data analysis
 
-# Project Title
+Analysis of a PER2-HALO experiment to determine if PER2 interacts with mTORC1 and a PER2-PROTAC experiment to see if degradation of PER2 impacts components of mTORC1
 
-Contact: XXX.
-Monday ID: XXXX
 
 ## Directory structure:
-- raw: PSM, peptide and protein level output from PD. 
+- raw: PSM, peptide and protein level output from MaxQuant.
 - notebooks: R markdown notebooks for all analysis. Run in denoted order.
 - results: Output from analysis notebooks
 - external: Data external to project required for analysis
@@ -17,16 +15,24 @@ For CRAN use `install.packages()`\
 For Bioconductor, use `BiocManager::install()`\
 Both the above functions will take multiple package names, e.g `BiocManager::install(c(QFeatures, limma))`
 
+
 ### CRAN
 here\
 tidyr\
 dplyr\
-ggplot2
-
+tibble\
+ggplot2\
+ggrepel\
+ggbeeswarm\
+openxlsx\
+xml2\
+knitr
 
 
 ### Bioconductor
-QFeatures
+QFeatures\
+limma\
+limpa
 
 
 ### Github

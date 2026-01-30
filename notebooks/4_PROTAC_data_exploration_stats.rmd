@@ -1,0 +1,359 @@
+---
+title: "PER2-PROTAC: Data exploration and statistical testing"
+author: "Tom Smith"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+Here, we explore the protein-level quantitative data and perform statistical testing to identify phosphorylation changes upon PROTAC treatment.
+
+# Setup
+
+Load required packages
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+library(QFeatures)
+library(biomasslmb)
+library(here)
+library(limma)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(tidyr)
+library(ggbeeswarm)
+
+```
+
+
+Define directory for plots
+
+```{r}
+plots_dir <- here('results/plots')
+if(!dir.exists(plots_dir)){
+  dir.create(plots_dir, recursive = TRUE)
+}
+```
+
+Read in the data
+
+```{r}
+
+output_dir <- here('notebooks/output')
+
+qfs <- readRDS(here(output_dir, 'PROTAC_qfs.rds'))
+
+long_format_protein <- readRDS(
+  here(output_dir, 'PROTAC_long_format_protein.rds'))
+
+long_long_format_phosphopeptide_norm_to_protein <- readRDS(
+  here(output_dir, 'PROTAC_long_long_format_phosphopeptide_norm_to_protein.rds'))
+
+
+```
+
+
+# Data exploration
+
+## PCA plots
+
+Below, we make PCA plots for the protein and phosphopeptide data. At the protein level, DMSO and PROTAC separate on PC1 (30% of variance), with two DMSO-2 and PROTAC-3 relatively close together. For phosphopeptides, the conditions separate very well (PC1; ~40% variance explained)
+
+```{r, fig.show='hold', out.width='50%', warning=FALSE, message=FALSE}
+for(qf in names(qfs)){
+
+  if(qf=='total'){
+    assay_name <- 'protein'
+    feature <- 'Protein'
+  } else{
+    assay_name <- 'phosphopeptide'
+    feature <- 'Phosphopeptide'
+  }
+  
+  
+  print(plot_pca(
+    qfs[[qf]], i=assay_name, colour_by = 'condition', shape='replicate') +
+      ggtitle(feature))
+
+}
+```
+
+# Statistical testing of protein abundance changes between conditions
+
+
+## Protein
+
+First, we'll perform statistical testing to compare the conditions (PROTAC vs DMSO) for total protein abundance
+
+```{r, out.width='50%', warning=FALSE, message=FALSE, fig.show='hold'}
+
+## Create design matrix for the linear model
+condition <- factor(qfs$total[['protein']]$condition, levels=c('DMSO', 'PROTAC'))
+m_design <- model.matrix(~condition)
+
+## Fit linear model using the design matrix and desired contrasts
+fit_model <- lmFit(object = assay(qfs$total[['protein']]), design = m_design)
+
+## Update the model using the limma eBayes algorithm
+final_model <- eBayes(fit = fit_model, 
+                      trend = TRUE,
+                      robust = TRUE)
+
+## Add TREAT to final model to perform fold-change thresholding for contrasts
+# require |FC| significantly over 1.25x
+final_model_treat <- treat(fit_model, fc=1.25, trend=TRUE, robust=TRUE)  
+
+## QC plot to assess if there is a trend between abundance and variance, as expected
+plotSA(fit = final_model,
+       cex = 0.5,
+       xlab = "Average log2 abundance")
+
+## Format results
+prot_limma_results <- topTreat(
+  fit = final_model_treat,   
+  coef = 'conditionPROTAC', 
+  adjust.method = "BH",    # Method for multiple hypothesis testing
+  number = Inf) %>%        # Print results for all proteins
+  tibble::rownames_to_column("Protein") %>%
+  merge(data.frame(rowData(qfs$total)[['protein']]),
+        by.x='Protein', by.y='row.names', all.x=TRUE) %>%
+  arrange(P.Value)
+
+## Check distribution of p-values. Because we are using treat, we don't expect a 
+## uniform distribution under the null, but rather a peak near 1.
+p <- prot_limma_results %>%
+  as_tibble() %>%
+  ggplot(aes(x = P.Value)) + 
+  geom_histogram() +
+  theme_biomasslmb()
+
+print(p)
+
+```
+
+
+How many proteins have a significant change in abundance
+
+```{r}
+table(prot_limma_results$adj.P.Val<0.05,
+      ifelse(prot_limma_results$logFC>0, 'Increased', 'Decreased')) %>%
+  knitr::kable()
+
+prot_limma_results %>%
+  filter(adj.P.Val<0.05) %>%
+  select(Protein, Gene.Names.First, logFC, adj.P.Val) %>%
+  knitr::kable()
+```
+
+OK, so very few proteins have a significant change in abundance!
+
+
+
+
+### Phosphopeptide statistical testing
+
+Next, we perform statistical testing for the phosphopeptide data, comparing PROTAC vs DMSO while accounting for the matched protein abundance measurements.
+
+```{r}
+# Create data matrix for modelling
+to_model_phospho <- long_long_format_phosphopeptide_norm_to_protein %>%
+  filter(type!='phosphopeptide_prot_norm') %>%
+  select(prot_phos, condition, replicate, type, abundance) %>%
+  pivot_wider(names_from = c(condition, replicate, type), values_from=abundance) %>%
+  tibble::column_to_rownames('prot_phos')
+
+# Create design matrix for the linear model
+exp_cond_phospho <- data.frame(sample=colnames(to_model_phospho)) %>%
+  separate(sample, into=c('condition', 'replicate', 'type'), remove = FALSE)
+
+condition <- factor(exp_cond_phospho$condition, levels=c('DMSO', 'PROTAC'))
+
+type <- factor(exp_cond_phospho$type, levels=c('protein', 'phosphopeptide'))
+
+m_design_phospho <- model.matrix(~ condition * type)
+
+# same ID for phospho + total from the same sample
+block <- interaction(condition, exp_cond_phospho$replicate)   
+
+# Estimate the correlation between measurements from the same block
+corfit <- duplicateCorrelation(as.matrix(to_model_phospho),
+                               m_design_phospho, block=block)
+
+# Fit the linear model with blocking and correlation information
+limma_fit_phospho <- lmFit(
+  as.matrix(to_model_phospho), m_design_phospho, block=block, correlation=corfit$consensus)
+
+# Update the model using the limma eBayes algorithm
+limma_fit_phospho_eb <- eBayes(limma_fit_phospho, trend=TRUE, robust=TRUE)  
+
+# QC plot to assess if there is a trend between abundance and variance, as expected,
+# and if the limma 'trend' captures this
+plotSA(limma_fit_phospho_eb)
+
+# Format results
+phospho_limma_results <- topTable(limma_fit_phospho_eb, coef = 'conditionPROTAC:typephosphopeptide',
+  adjust.method = "BH",    # Method for multiple hypothesis testing
+  number = Inf) %>%        # Print results for all proteins
+  tibble::rownames_to_column("phosphosite") %>%
+  merge(rowData(qfs$phospho)[['phosphopeptide']][
+    ,c('Entry.Name', 'Protein.names.y', 'Gene.Names', 'Gene.Names.First', 'site_seq')],
+        by.x='phosphosite', by.y='row.names', all.x=TRUE) %>%
+  data.frame() %>%
+  separate(phosphosite, into=c('UniprotID', 'phospho_pos'), sep='_', remove=FALSE)
+
+
+```
+
+
+
+Save results
+
+```{r}
+saveRDS(phospho_limma_results, here(output_dir, 'PROTAC_phospho_limma_results.rds'))
+
+```
+
+## How many phosphosites have a significant change in abundance?
+
+Below, we summarise how many phosphosites have a significant change in abundance (FDR<5%)
+
+```{r, out.width='50%'}
+table(ifelse(phospho_limma_results$adj.P.Val<0.05, 'Significant', 'Not significant'),
+      ifelse(phospho_limma_results$logFC>0, 'Increased', 'Decreased')) %>%
+  knitr::kable()
+
+
+phospho_limma_results %>%
+  mutate(type=ifelse(grepl('Y', phospho_pos), 'Tyrosine', 'Serine/Threonine')) %>%
+  mutate(sig=adj.P.Val<0.05) %>%
+  group_by(sig, type, direction=ifelse(logFC>0, 'Increased', 'Decreased')) %>%
+  tally() %>%
+  group_by(type, direction) %>%
+  mutate(perc=100*n/sum(n)) %>%
+  filter(sig) %>%
+  ungroup() %>%
+  complete(direction, type, fill=list(n=0)) %>%
+  ggplot(aes(type, perc, fill=direction)) +
+  geom_col(position='dodge', width=0.5) +
+  theme_biomasslmb() +
+  labs(x='', y='Percentage of significant\nphosphosites (FDR<5%)', fill='Direction of change') +
+  scale_fill_manual(values=get_cat_palette(2)) +
+  geom_text(aes(label=n), position=position_dodge(width=0.5), vjust=-0.5, size=4) +
+  ylim(0, 40) +
+  theme(strip.background = element_blank())
+```
+
+Below, we make a volcano plot for the statistical test results
+
+```{r, fig.width=6, fig.height=6}
+# highlight top 10 significant proteins per genotype
+phospho_limma_results %>%
+  group_by(logFC>0) %>%
+  filter(adj.P.Val<0.05) %>%
+  slice_min(P.Value, n=10) -> highlight
+
+phospho_limma_results %>%
+  mutate(significant=adj.P.Val<0.05) %>%
+  ggplot(aes(logFC, -log10(P.Value))) +
+  geom_point(aes(fill=significant,
+             alpha=significant, size=significant),
+             colour='grey20', stroke=0.25, shape=21) +
+  theme_biomasslmb() +
+  scale_fill_manual(values=c('grey60', get_cat_palette(1)),
+                      name='Significant\n(FDR<5%)') +
+  scale_size_manual(values=c(0.5, 1), guide='none') +
+  scale_alpha_manual(values=c(0.1, 0.5), guide='none') +
+  labs(x='log2 FC (PROTAC vs DMSO)', y='-log10(p-value)') +
+  theme(strip.background = element_blank()) +
+  geom_text_repel(
+    data=highlight,
+    aes(label=paste(Gene.Names.First, gsub('.*_', '', phosphosite))),
+    max.overlaps = 50, size=3, min.segment.length =0, colour='black', force = 10) +
+  ggtitle('Phosphorylation') -> p
+
+print(p)
+```
+
+## Plot changes in phosphorylation for AKT1S1
+
+Below, we plot the changes in phosphorylation for AKT1S1, which has multiple significantly changing sites
+
+```{r}
+
+p_values <- phospho_limma_results %>%
+  filter(Gene.Names.First=='AKT1S1') %>%
+  mutate(ptm_name=phosphosite)
+
+to_plot <- long_long_format_phosphopeptide_norm_to_protein %>%
+  filter(Gene.Names.First=='AKT1S1', type=='phosphopeptide_prot_norm')
+
+DMSO_abundances <- to_plot %>%
+  filter(condition=='DMSO') %>%
+  group_by(prot_phos) %>%
+  summarise(abundance=mean(abundance))
+
+to_plot <- to_plot %>%
+  merge(DMSO_abundances, by='prot_phos', suffix=c('', '_DMSO')) %>%
+  mutate(abundance_diff=abundance - abundance_DMSO) %>%
+  group_by(condition, prot_phos) %>%
+  mutate(mean_abundance_diff=mean(abundance_diff)) %>%
+  arrange(desc(mean_abundance_diff)) %>%
+  mutate(ptm_name_facet=gsub('; ', ';\n', ptm_name))
+
+to_plot$ptm_name_facet <- factor(to_plot$ptm_name_facet,
+                                 levels=unique(to_plot$ptm_name_facet))
+
+p_values <- phospho_limma_results %>%
+  filter(Gene.Names.First=='AKT1S1') 
+
+sig_sites <- p_values %>%
+  filter(adj.P.Val<0.1) %>%
+  pull(phospho_pos)
+
+p <- to_plot %>%
+  filter(ptm_name %in% sig_sites) %>%
+  filter(condition!='DMSO') %>%
+  ggplot(aes(ptm_name, abundance_diff)) +
+  geom_hline(yintercept = 0, colour='grey50', linetype='dashed') +
+  geom_point(colour='black', stroke=0.5, shape=21,
+             fill=get_cat_palette(2)[2], size=5) +
+  stat_summary(fun.min=mean, fun.max=mean, geom='errorbar',
+               linewidth=2, width=0.4, colour='grey20') +
+  theme_biomasslmb(aspect_square = FALSE) +
+  labs(x='', y=expression(Log[2]*FC~"(PROTAC/DMSO)"))  +
+  theme(axis.text.x=element_text(angle=45, hjust=1, vjust=1)) +
+  facet_grid(.~ptm_name_facet, scales='free_x') +
+  theme(strip.background = element_blank(),
+        panel.spacing = unit(0, 'mm'),
+        axis.text.x = element_blank(),
+        aspect.ratio=4,
+        strip.text.x=element_text(vjust=1, hjust=0),
+        plot.title = element_text(hjust=0.5)) +
+  ggtitle('AKT1S1')
+
+p1 <- p + theme(strip.text.x=element_text(vjust=0.5, hjust=0.5, size=15))
+print(p1)
+ggsave(plot=p1, here('results/plots/PROTAC_AKT1S1_phosphosite_changes_selected.png'))
+ggsave(plot=p1, here('results/plots/PROTAC_AKT1S1_phosphosite_changes_selected.pdf'))
+
+
+p2 <- p + filter(to_plot, condition!='DMSO')
+print(p2)
+ggsave(plot=p2, here('results/plots/PROTAC_AKT1S1_phosphosite_changes.png'))
+ggsave(plot=p2, here('results/plots/PROTAC_AKT1S1_phosphosite_changes.pdf'))
+
+```
+
+# Save results
+
+```{r}
+phospho_limma_results %>%
+  write.table(here('results/PROTAC_phospho_limma_results.tsv'),
+              sep='\t', row.names=FALSE, quote=FALSE)
+```
+
+
+Finally, session info:
+
+```{r}
+sessionInfo()
+```

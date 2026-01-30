@@ -1,0 +1,566 @@
+---
+title: "PER2-PROTAC: QC PSM-level quantification and summarisation to protein-level abundance"
+author: "Tom Smith"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+Here, we will read in the PSM-level quantification data, perform routine PSM filtering and then summarise the quantification to protein-level abundances.
+
+
+# Setup
+
+Load required packages
+
+```{r, message=FALSE}
+library(biomasslmb)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(here)
+library(QFeatures)
+library(openxlsx)
+
+
+```
+
+Read in Uniprot protein details
+
+```{r}
+uniprot2details_unique <- readRDS(here('external/uniprot2details_unique.rds'))
+```
+
+## Defining the contaminant proteins
+
+We need to remove contaminant proteins. Below, we parse the MaxQuant contaminants fasta to extract the IDs for the proteins.
+
+```{r}
+
+contaminant_proteins <- get_maxquant_cont_accessions()
+
+```
+
+## Define the experiment design
+
+We can extract the details for the experiment to sample mapping from the Excel file provided.
+
+```{r}
+exp_design <- openxlsx::read.xlsx(here('raw/PROTAC/exp_design.xlsx'),
+                                startRow = 7, colNames = FALSE ) %>%
+  setNames(c('sample_name', 'sample_conditions', 'reporter_n',
+             'tag', 'reporter_mass')) %>%
+  separate(sample_conditions, into=c('genotype', 'condition', 'replicate'),
+           sep=' ', remove = FALSE) %>%
+  mutate(genotype=ifelse(genotype=='P1H/P2H', 'P1H.P2H', genotype)) %>%
+  mutate(quantCols=reporter_n) 
+  
+```
+
+# Read in input data
+
+We start by reading in quantitative proteomics data into a `QFeatures` object, which is the standard Bioconductor object for holding quantitative proteomics data. See [here](https://www.bioconductor.org/packages/release/bioc/html/QFeatures.html) for documentation about the `QFeatures` object.
+
+
+```{r}
+pg_inf <- here('raw/PROTAC/proteinGroups.txt.gz')
+pg_df <- read.delim(pg_inf)
+table(pg_df$Q.value<0.01)
+```
+
+
+## Creating the QFeatures object
+
+Now we can now create the QFeatures object. Here, we will create two PSM-level QFeatures objects, one for the total proteome and one for the phosphoproteome.
+
+```{r}
+psm_inf <- here('raw/PROTAC/evidence.txt.gz')
+
+infdf <- read.delim(psm_inf)
+
+# Merge on the leading razor protein column from the Peptides file
+infdf <- merge(infdf, uniprot2details_unique,
+                by.x='Leading.razor.protein', by.y='UniprotID', all.x=TRUE) %>%
+  merge(pg_df[,c('Majority.protein.IDs', 'Q.value')], 'Leading.razor.protein',
+        by.y='Majority.protein.IDs', all.x=TRUE)
+
+# Define the abundance columns
+abundance_cols <- 56:73
+
+# Rename the abundance columns to be just the reporter mass
+colnames(infdf)[abundance_cols] <- gsub(
+  'Reporter.intensity.corrected.', '', colnames(infdf)[abundance_cols])
+
+# Split into phospho and total
+phospho_infdf <- filter(infdf, grepl('phos', Raw.file))
+total_infdf <- filter(infdf, !grepl('phos', Raw.file))
+
+# Create QFeatures object for total
+tmt_qf <- QFeatures::readQFeatures(
+    assayData = total_infdf,
+    quantCols = abundance_cols,
+    colData = exp_design, name='psm_raw')
+
+# Copy over the colData
+colData(tmt_qf[['psm_raw']]) <- colData(tmt_qf)
+
+# Create QFeatures object for phospho
+phospho_tmt_qf <- QFeatures::readQFeatures(
+    assayData = phospho_infdf,
+    quantCols = abundance_cols,
+    colData = exp_design, name='psm_raw')
+
+colData(phospho_tmt_qf[['psm_raw']]) <- colData(phospho_tmt_qf)
+
+# Combine into a list and replace zeroes with NAs
+qfs <- list('total'=tmt_qf, 'phospho'=phospho_tmt_qf)
+qfs <- lapply(qfs, function(x) zeroIsNA(x, names(x)))
+
+```
+
+Subset to the PER2-PROTAC samples only
+
+```{r}
+
+qfs <- lapply(qfs, function(x) x[,colData(x)$genotype =='P2H'])
+
+
+```
+
+# Filtering PSMs
+
+We first perform routine filtering to remove PSMs that:
+
+- Could originate from contaminants. See `?filter_features` for further details, including the removal of 'associated cRAP'.
+- Don't have a unique master protein.
+
+```{r}
+for(qf in names(qfs)){
+  
+  in_assay_name <- 'psm_raw'
+  out_assay_name <- 'psm_filtered'
+  
+  qfs[[qf]][[out_assay_name]] <- filter_features_mq_dda(
+    qfs[[qf]][[in_assay_name]],
+    contaminant_proteins=contaminant_proteins,
+    filter_contaminant=TRUE,
+    filter_associated_contaminant=TRUE,
+    unique_master=TRUE)
+  
+  if(qf == 'total'){
+    qfs[[qf]] <- filterFeatures(qfs[[qf]], i=out_assay_name, ~ Q.value <= 0.01)
+    
+    biomasslmb:::message_parse(rowData(qfs[[qf]][[out_assay_name]]),
+                               "Leading.razor.protein",
+                               "Proteins with Q-Value > 0.01 removed")
+  }
+
+}
+
+```
+
+## Phosphosite annotation
+
+Below, we annotate the phosphopeptide PSMs to determine the phosphosite positions and sequences.
+
+```{r, warning=FALSE}
+
+proteome_fasta_filepath <- tempfile()
+make_fasta(unique(phospho_infdf$Leading.razor.protein), file=proteome_fasta_filepath)
+
+
+in_assay_name <- 'psm_filtered'
+out_assay_name <- 'psm_annot'
+
+qfs$phospho[[out_assay_name]] <- biomasslmb::filter_maxquant_ptm(
+  qfs$phospho, in_assay_name) 
+
+# Retain phosphosites in all contexts (ptms_to_retain=c('p', '(ph)', '(ac)p'))
+qfs$phospho[[out_assay_name]] <- add_filter_ptm_pos_rowdata_mq(
+  qfs$phospho[[out_assay_name]], verbose = TRUE,
+  min_prob = 0.501, filter_pep_by_prob = TRUE)
+
+# Add phospho site positions
+qfs$phospho[[out_assay_name]] <- add_ptm_positions(
+  obj=qfs$phospho[[out_assay_name]], proteome_fasta=proteome_fasta_filepath)
+
+# Create a combined protein_phosphosite identifier
+rowData(qfs$phospho)[[out_assay_name]]$prot_phos <- paste(
+  rowData(qfs$phospho)[[out_assay_name]]$Leading.razor.protein,
+    gsub(' ','', rowData(qfs$phospho)[[out_assay_name]]$ptm_name), sep='_')
+
+# Add phospho site sequence
+qfs$phospho[[out_assay_name]] <- qfs$phospho[[out_assay_name]] %>%
+  add_site_sequence(proteome_fasta  = proteome_fasta_filepath,
+                    master_protein_col = 'Leading.razor.protein',
+                    sequence_pad=7)
+  
+# Clean up the fasta file now we've finished with it
+file.remove(proteome_fasta_filepath)
+```
+
+## Normalise
+
+Next, we normalise the PSM level intensities by performing diff.median normalisation within each plex.
+
+```{r, warning=FALSE, fig.show='hold', fig.show="hold", out.width="50%"}
+
+for(qf in names(qfs)){
+  
+  if(qf=='total'){
+    in_assay_name <- 'psm_filtered'
+    
+  } else{
+    in_assay_name <- 'psm_annot'
+  
+  }
+  
+  out_assay_name <- 'psm_filtered_norm'
+
+  # Log2-transform, normalise, then back-transform
+  qfs[[qf]][[out_assay_name]] <- QFeatures::logTransform(
+    qfs[[qf]][[in_assay_name]], base=2)
+  qfs[[qf]][[out_assay_name]] <- QFeatures::normalize(
+    qfs[[qf]][[out_assay_name]], method='diff.median')
+  
+  assay(qfs[[qf]][[out_assay_name]]) <- 2^assay(qfs[[qf]][[out_assay_name]])
+  
+  
+  # Plot the peptide-level quantification distributions per sample
+  p <- plot_quant(qfs[[qf]][[in_assay_name]], log2transform=TRUE, method='density') +
+    theme_biomasslmb() +
+    xlab('PSM abundance (log2)') +
+    theme(legend.key.height=unit(3, 'mm')) +
+    aes(colour=condition) +
+    ggtitle(paste0(qf, ' pre-norm.'))
+  print(p)
+  
+  p <- plot_quant(qfs[[qf]][[out_assay_name]], log2transform=TRUE, method='density') +
+    theme_biomasslmb() +
+    xlab('PSM abundance (log2)') +
+    theme(legend.key.height=unit(3, 'mm')) +
+    aes(colour=condition) +
+    ggtitle(paste0(qf, ' post-norm.'))
+  print(p)
+
+
+}
+```
+
+# Summarising the total PSM abundances to higher level abundances
+
+Now that we have inspected the PSM-level quantification and filtered the PSMs, we can summarise the total PSMs to protein-level abundances and the phospho PSMs to phosphosite-level abundance
+
+For PSM to protein summarisation with TMT quantification, simply summing together the PSM-level abundances provides accurate estimates, so long as there are no missing values.  Summing has the benefit of weighting the summarisation towards the most abundant PSMs, which are more likely to be accurately quantified. Where many missing values are present, the `MsCoreUtils::robustSummary` method should be preferred, since it is able to summarise accurately, even in the presence of missing values. Here, we have very few missing values, so we will use summation, with a prior step to impute the missing values.
+
+```{r, fig.height=7, fig.width=7, warning=FALSE, message=FALSE}
+plot_missing_upset(obj = qfs$total, i='psm_filtered_norm')
+  
+nNA(qfs$total, i=names(qfs$total)[grepl('_norm', names(qfs$total))])$nNA %>%
+  data.frame() %>% knitr::kable()
+
+nNA(qfs$phospho, i=names(qfs$phospho)[grepl('_norm', names(qfs$phospho))])$nNA %>%
+  data.frame() %>% knitr::kable()
+```
+
+```{r}
+set.seed(42)
+
+for(qf in names(qfs)){
+
+  in_assay_name <- 'psm_filtered_norm'
+  out_assay_name <- 'psm_filtered_forSum'
+
+  # Remove PSMs with > 1 missing values
+  qfs[[qf]][[out_assay_name]] <- QFeatures::filterNA(
+    qfs[[qf]][[in_assay_name]], 1/6)
+  
+  biomasslmb:::message_parse(rowData(qfs$total[[out_assay_name]]),
+                             'Leading.razor.protein',
+                             "Removing PSMs with excessive missing values")
+  
+  # Check remaining missing values
+  print(sprintf('Missing values in %s = %s %%',
+          qf,
+          round(100*mean(is.na(assay(qfs[[qf]][[out_assay_name]]))), 3)))
+  
+  # Impute remaining missing values using MinProb. We log2-transform, impute, then back-transform
+  qfs[[qf]][[out_assay_name]] <- logTransform(
+    qfs[[qf]][[out_assay_name]], base=2)
+  qfs[[qf]][[out_assay_name]] <- QFeatures::impute(
+    qfs[[qf]][[out_assay_name]], method='MinProb')
+  assay(qfs[[qf]][[out_assay_name]]) <- 2^assay(qfs[[qf]][[out_assay_name]])
+    
+
+}
+```
+
+
+Finally, we perform the summarisation.
+
+```{r, warning=FALSE, message=FALSE}
+for(qf in names(qfs)){
+
+  
+  in_assay_name <- 'psm_filtered_forSum'
+                             
+    if(qf=='total'){
+      out_assay_name <- 'protein'
+      group_col <- "Leading.razor.protein"
+    } else{
+      out_assay_name<- 'phosphopeptide'
+      group_col <- "prot_phos"
+    }
+
+  qfs[[qf]] <- aggregateFeatures(qfs[[qf]], 
+                                 i = in_assay_name, 
+                                 fcol = group_col,
+                                 name = out_assay_name,
+                                 fun = base::colSums)
+
+  # Log2-transform the summarised abundances for downstream analysis
+  qfs[[qf]][[out_assay_name]] <- logTransform(qfs[[qf]][[out_assay_name]], base=2)
+  
+  qfs[[qf]][[out_assay_name]]
+}
+  
+
+```
+
+A final check that that the summarised abundances look sensible
+
+```{r, warning=FALSE, fig.show='hold', fig.show="hold", out.width="50%"}
+for(qf in names(qfs)){
+
+  if(qf=='total'){
+    assay_name <- 'protein'
+    feature <- 'Protein'
+  } else{
+    assay_name <- 'phosphopeptide'
+    feature <- 'Phosphopeptide'
+  }
+  
+  p <- plot_quant(qfs[[qf]][[assay_name]], log2transform=FALSE, method='density') +
+    theme_biomasslmb() +
+    xlab(sprintf('%s abundance (log2)', feature)) +
+    theme(legend.key.height=unit(3, 'mm')) +
+    ggtitle(qf)
+  
+  print(p)
+}
+
+
+
+
+```
+
+# Inspecting the number of peptides and proteins through the processing steps
+
+Now that we have performed all the filtering steps, it's helpful to visualise how many peptides/proteins were retained at each level of the processing. 
+
+## Samples per PSM
+
+We'll start by inspecting the number of peptides in each experiment. We set the row variables to be `Sequence`, `Modifications` and `Retention.time` so that we count the number of unique PSMs.
+
+```{r, fig.height=7, fig.width=7, message=FALSE, warning=FALSE}
+
+for(qf in names(qfs)){
+  
+  rowvars <- c('Sequence', 'Modifications', 'Retention.time')
+
+  if(qf=='total'){
+    rename_cols <- c(
+      'PSMs - detected' = 'psm_raw',
+      'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
+      'PSMs - filtered for summarisation' = 'psm_filtered_forSum')
+
+  } else{
+    rename_cols <- c(
+      'PSMs - detected' = 'psm_raw',
+      'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
+      'PSMs - filtered (phosphosites confidently localised)' = 'psm_annot',
+      'PSMs - filtered for summarisation' = 'psm_filtered_forSum')
+  }
+    
+  samples_present <- get_samples_present(qfs[[qf]][,,unname(rename_cols)],
+                                         rowvars, rename_cols)
+  
+  p <- plot_samples_present(samples_present, rowvars, breaks=seq(1,6,1)) +
+    ylab('PSMs') + ggtitle(qf)
+    
+  print(p)
+}
+
+  
+
+```
+
+
+
+## Samples per protein
+
+We need to set the row variables to be just the `Leading.razor.protein` column so we count the number of unique proteins.
+
+```{r, fig.height=7, fig.width=7, message=FALSE, warning=FALSE}
+for(qf in names(qfs)){
+  print(qf)
+  
+  rowvars <- c('Leading.razor.protein')
+
+    if(qf=='total'){
+      feature <- 'Proteins'
+      
+      rename_cols <- c(
+        'PSMs - detected' = 'psm_raw',
+        'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
+        'PSMs - filtered for summarisation' = 'psm_filtered_forSum',
+        'Protein' = 'protein')
+      } else{
+        feature <- 'Phosphopeptides'
+        
+        rename_cols <- c(
+          'PSMs - detected' = 'psm_raw',
+          'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
+          'PSMs - filtered (phosphosites confidently localised)' = 'psm_annot',
+          'PSMs - filtered for summarisation' = 'psm_filtered_forSum',
+          'Phosphopeptide' = 'phosphopeptide')
+
+    }
+      
+    samples_present <- get_samples_present(qfs[[qf]][,,unname(rename_cols)],
+                                           rowvars, rename_cols)
+    
+    p <- plot_samples_present(samples_present, rowvars, breaks=seq(1,6,1)) +
+      ylab(feature) + ggtitle(qf)
+      
+    print(p)
+  }
+
+  
+
+
+
+
+
+
+```
+
+# Saving out results
+
+Save out the QFeatures for downstream notebooks
+
+```{r}
+output_dir <- here('notebooks/output')
+
+
+saveRDS(qfs, here(output_dir, 'PROTAC_qfs.rds'))
+```
+
+Save the protein quantification in wide format
+
+```{r}
+
+
+results_dir <- here('results')
+
+protein_wide_format <- assay(qfs$total[['protein']]) 
+
+protein_wide_format <- protein_wide_format %>%
+  data.frame() %>%
+  tibble::rownames_to_column('UniprotID')
+
+
+write.table(protein_wide_format,
+            file = here(results_dir, 'PROTAC_wide_format_protein.tsv'),
+            quote=FALSE, row.names=FALSE, sep='\t')
+```
+
+We will also want the quantification in 'tidy' (long) form in a data.frame for plotting. Below, we create and save this
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# Given a QFeatues, with protein level abundances,
+# condition and cell line colVars and 
+# Master.Protein.gene.name, Master.Protein.long.name and
+# Master.Protein.Descriptions Rowvars, return the abundances in a long format
+# data.frame
+get_long_format_exp <- function(
+    obj,
+    colvars=c('condition', 'replicate'),
+    rowvars=c('Leading.razor.protein', 'Protein.names.y',
+              'Gene.Names', 'Gene.Names.First')){
+  
+  long_format_protein <- longFormat(
+    obj,
+    colvars=colvars, 
+    rowvars=rowvars) %>%
+    data.frame() %>%
+    select(rowname,
+           abundance=value,
+           all_of(colvars),
+           all_of(rowvars))
+  
+  return(long_format_protein)
+
+}
+
+
+long_format_protein <- get_long_format_exp(qfs$total[,,'protein']) %>%
+    dplyr::rename('UniprotID'=rowname)
+
+saveRDS(long_format_protein, here(output_dir, 'PROTAC_long_format_protein.rds'))
+
+write.table(long_format_protein,
+            file = here(results_dir, 'PROTAC_long_format_protein.tsv'),
+            quote=FALSE, row.names=FALSE, sep='\t')
+
+long_format_phospho <- get_long_format_exp(
+  qfs$phospho[,,'phosphopeptide'],
+  rowvars=c('Leading.razor.protein', 'Protein.names.y', 'Gene.Names',
+            'Gene.Names.First', 'ptm_positions_prot', 'prot_phos', 'ptm_name'))%>%
+  dplyr::rename('phosphopeptide'=rowname)
+
+saveRDS(long_format_phospho, here(output_dir, 'PROTAC_long_format_phospho.rds'))
+
+write.table(long_format_phospho,
+            file = here(results_dir, 'PROTAC_long_format_phospho.tsv'),
+            quote=FALSE, row.names=FALSE, sep='\t')
+
+
+
+```
+# Normalising phosphoproteomics to protein abundances
+
+Below, we create a long format data.frame containing the phosphopeptide abundances normalised to the corresponding protein abundance.
+
+```{r}
+long_format_phosphopeptide_norm_to_protein <- long_format_protein %>%
+  select(UniprotID, condition, replicate, abundance) %>%
+  merge(long_format_phospho,
+        by.x=c('UniprotID', 'condition', 'replicate'),
+        by.y=c('Leading.razor.protein', 'condition', 'replicate'),
+        suffixes=c('.protein', '.phosphopeptide')) %>%
+  mutate(
+    abundance_phosphopeptide_prot_norm=abundance.phosphopeptide-abundance.protein)
+
+saveRDS(long_format_phosphopeptide_norm_to_protein,
+        here(output_dir,'PROTAC_long_format_phosphopeptide_norm_to_protein.rds'))
+
+  
+long_long_format_phosphopeptide_norm_to_protein <- long_format_phosphopeptide_norm_to_protein %>%
+  pivot_longer(cols=matches('abundance'), names_to='type', values_to='abundance') %>%
+  mutate(type=gsub('abundance.', '', type)) %>%
+  mutate(type=factor(type, levels=c('protein', 'phosphopeptide',
+                                    'phosphopeptide_prot_norm')))
+
+saveRDS(long_long_format_phosphopeptide_norm_to_protein,
+        here(output_dir, 'PROTAC_long_long_format_phosphopeptide_norm_to_protein.rds'))
+
+```
+
+
+
+```{r}
+sessionInfo()
+```
+

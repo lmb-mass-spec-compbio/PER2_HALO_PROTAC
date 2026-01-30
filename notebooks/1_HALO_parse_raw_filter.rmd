@@ -1,0 +1,357 @@
+---
+title: "PER2-HALO: QC peptide-level quantification and filter"
+author: "Tom Smith"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+Here, we will read in the peptide-level quantification data and perform routine filtering.
+
+# Setup
+
+Load required packages
+
+```{r, message=FALSE}
+library(biomasslmb)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(here)
+library(QFeatures)
+library(xml2)
+
+```
+
+Read in the protein details
+
+```{r}
+uniprot2details <- readRDS(here('external/uniprot2details_unique.rds'))
+```
+
+
+# Read the peptide data into a QFeatures object
+
+We now start reading in the peptide-level quantification data from MaxQuant into a `QFeatures` object.
+
+## Defining the contaminant proteins
+
+We need to remove contaminant proteins. Below, we parse the MaxQuant contaminants fasta to extract the IDs for the proteins.
+
+```{r}
+contaminant_proteins <- get_maxquant_cont_accessions()
+```
+
+## Reading in the peptide-level quantification data
+
+We need to read in both the proteinGroups.txt files from MaxQuant to identify the proteins which pass the 1% FDR threshold, and the modificationSpecificPeptides.txt file to get the peptide-level quantification.
+
+```{r}
+pg_inf <- here('raw/HALO/proteinGroups.txt.gz')
+pg_df <- read.delim(pg_inf)
+
+
+seq2razor <- read.delim(here('raw/HALO/peptides.txt.gz')) %>%
+  select(Sequence, Leading.razor.protein)
+
+pep_inf <- here('raw/HALO/modificationSpecificPeptides.txt.gz')
+pep_df <- read.delim(pep_inf)
+
+# Merge with the leading razor protein column
+pep_df <- merge(pep_df, seq2razor, by='Sequence')
+
+per2_lines <- which(grepl('O15055', pep_df$Proteins))
+halo_lines <- which(pep_df$Proteins=='PER2HALO;PER2MNG')
+
+pep_df$Leading.razor.protein[halo_lines] <- 'HALO_TAG'
+pep_df$Leading.razor.protein[per2_lines] <- 'O15055'
+
+# Merge with the protein details and Q-values
+pep_df <- merge(pep_df, uniprot2details,
+                by.x='Leading.razor.protein', by.y='UniprotID', all.x=TRUE) %>%
+  merge(pg_df[,c('Majority.protein.IDs', 'Q.value')], 'Leading.razor.protein',
+        by.y='Majority.protein.IDs', all.x=TRUE)
+
+```
+
+
+## Extracting the experiment to sample mapping
+
+We can extract the details for the experiment to sample mapping from the mqpar.xml file
+
+```{r}
+
+
+mqpar_inf <- here('raw/HALO/mqpar.xml')
+mqpar <- xml2::read_xml(mqpar_inf)
+
+# Extract the file paths and experiment names
+filepaths <- strsplit(
+  xml_text(xml_find_all(mqpar, ".//filePaths")), split='F:\\\\')[[1]]
+filepaths <- filepaths[filepaths!='']
+
+# Extract sample names from file paths
+sample <- gsub(
+  '(2565608863_Andrei_PER2_121225\\\\2565608863_Andrei_|.raw)', '', filepaths)
+
+experiments <- strsplit(
+  xml_text(xml_find_all(mqpar, ".//experiments")), split='')[[1]]
+
+# Checking that the lengths match
+length(sample)==length(experiments)
+
+# Create the coldata dataframe
+coldata <- data.frame('sample'=sample, 'experiments'=experiments) %>%
+  separate(sample, into=c('sample', NA)) %>%
+  distinct() %>%
+  mutate(sample=sub('(HA|P2H)', '\\1_', sample)) %>%
+  separate(sample, into=c('condition', 'replicate'), sep='_', remove=FALSE) %>%
+  mutate(quantCols=sample) %>%
+  tibble::column_to_rownames('sample')
+
+# named list to map from experimental name to sample name
+exp2sample <- coldata$quantCols
+names(exp2sample) <- coldata$experiments
+
+coldata %>%
+  knitr::kable()
+
+
+```
+
+## Creating the QFeatures object
+
+Now we can finally create the QFeatures object
+
+```{r}
+
+# Define the columns corresponding to the abundance values
+abundance_cols <- 32:37
+
+# Rename the abundance columns to the sample names
+colnames(pep_df)[abundance_cols] <- gsub(
+  'Intensity.', '', colnames(pep_df)[abundance_cols])
+
+colnames(pep_df)[abundance_cols] <- sapply(
+  colnames(pep_df)[abundance_cols], function(x) exp2sample[[x]])
+
+# Reorder the coldata to match the order of the abundance columns
+coldata <- coldata[colnames(pep_df)[abundance_cols],]
+
+# Create the QFeatures object
+lfq_qf <- readQFeatures(assayData = pep_df,
+                        colData = coldata,
+                        quantCols = abundance_cols,
+                        name = 'peptides_raw')
+
+# Set the colData for the peptides_raw experiment
+colData(lfq_qf[['peptides_raw']]) <- colData(lfq_qf) 
+```
+
+MaxQuant has reported `r sum(assay(lfq_qf[['peptides_raw']])==0, na.rm=TRUE)` quantification values as zero. These should be replaced with NA, since mass spectrometry is not capable of asserting that the protein had zero abundance in the sample.
+
+```{r}
+lfq_qf[['peptides_raw']] <- QFeatures::zeroIsNA(lfq_qf[['peptides_raw']])
+
+```
+
+
+
+
+# Filter the peptide-level quantification data
+
+We will now filter the peptide-level quantification data to remove contaminants and proteins which do not pass the 1% FDR threshold.
+
+
+```{r}
+
+lfq_qf[['peptides_filtered']] <- biomasslmb::filter_features_mq_dda(
+  lfq_qf[['peptides_raw']],
+  contaminant_proteins=contaminant_proteins,
+  filter_contaminant=TRUE,
+  filter_associated_contaminant=TRUE,
+  unique_master=FALSE)
+
+lfq_qf <- filterFeatures(lfq_qf, i='peptides_filtered', ~ Q.value <= 0.01)
+
+biomasslmb:::message_parse(rowData(lfq_qf[['peptides_filtered']]),
+                           "Leading.razor.protein",
+                           "Proteins with Q-Value > 0.01 removed")
+```
+
+# Normalise the peptide-level quantification data
+
+For the normalisation and summarisation, we need our quantification
+values to be on a log-scale, so we log-transform below
+
+```{r}
+lfq_qf[['peptides_filtered']] <- QFeatures::logTransform(
+  lfq_qf[['peptides_filtered']], base=2)
+```
+
+Next, we plot the peptide intensities.
+
+```{r, warning=FALSE, fig.show='hold', fig.show="hold", out.width="50%"}
+
+# Plot the peptide-level quantification distributions per sample
+plot_quant(lfq_qf[['peptides_filtered']], log2transform=FALSE, method='density') +
+  scale_colour_manual(values=rep(get_cat_palette(4), each=3)) +
+  aes(linetype=sample) +
+  scale_linetype_manual(values=rep(1:3, times=4)) +
+  xlab('Peptide abundance (log2)')
+```
+
+## Normalise
+
+Since the same amount of sample was injected for each sample, we could
+normalise to remove differences in the overall distribution of
+abundances. This is performed below using median normalisation.
+
+```{r}
+lfq_qf[['peptides_norm']] <- QFeatures::normalize(lfq_qf[['peptides_filtered']],
+                                                  method='diff.median')
+```
+
+Below, we can check this normalisation step has worked as intended.
+
+```{r, warning=FALSE, fig.show='hold', fig.show="hold", out.width="50%"}
+
+# Plot the peptide-level quantification distributions per sample
+plot_quant(lfq_qf[['peptides_norm']], log2transform=FALSE, method='density') +
+  scale_colour_manual(values=rep(get_cat_palette(4), each=3)) +
+  aes(linetype=sample) +
+  scale_linetype_manual(values=rep(1:3, times=4)) +
+  xlab('Peptide abundance (log2)')
+```
+
+## Normalise to histone proteins
+
+Median normalisation is suitable when we expect the overall distribution of protein abundances to be similar between the conditions. However, we don't expect the overall distribution of protein abundances to neccessarily be similar between the conditions here, since one is a free HALO tag and the other is PER2-HALO. We should also consider normalising to a set of proteins which we expect to be constant across the samples. Histone proteins are often used for this purpose since they are generally stable in abundance. Below, we identify the histone proteins in our dataset and explore their abundance post normalisation. They are more abundant in the HALO condition, suggesting that global median normalisation may be more inappropriate.
+
+```{r}
+hist_df <- uniprot2details %>%
+  filter(grepl('^Histone H', Protein.names))
+
+hist_df %>%
+  select('Uniprot'=UniprotID, 'Gene Name'=Gene.Names.First, 'Protein names'=Protein.names) %>%
+  knitr::kable()
+
+hist <- hist_df %>%
+  pull(UniprotID)
+
+# Plot the peptide-level quantification distributions per sample
+plot_quant(lfq_qf[['peptides_norm']][
+  rowData(lfq_qf[['peptides_norm']])$Leading.razor.protein %in% hist,],
+  log2transform=FALSE, method='density') +
+  scale_colour_manual(values=rep(get_cat_palette(4), each=3)) +
+  aes(linetype=sample) +
+  scale_linetype_manual(values=rep(1:3, times=4)) +
+  xlab('Peptide abundance (log2)')
+
+```
+
+
+Below, we normalise to the histone proteins and replot the peptide-level abundance distributions.
+
+```{r}
+hist_medians <- get_medians(lfq_qf[['peptides_filtered']][
+  rowData(lfq_qf[['peptides_filtered']])$Leading.razor.protein %in% hist,])
+
+lfq_qf[['peptides_norm_hist']] <- center_normalise_to_ref(
+  lfq_qf[['peptides_filtered']], medians = hist_medians, on_log_scale = TRUE)
+
+# Plot the peptide-level quantification distributions per sample
+plot_quant(lfq_qf[['peptides_norm_hist']], log2transform=FALSE, method='density') +
+  scale_colour_manual(values=rep(get_cat_palette(4), each=3)) +
+  aes(linetype=sample) +
+  scale_linetype_manual(values=rep(1:3, times=4)) +
+  xlab('Peptide abundance (log2)')
+```
+
+# Removing peptides with too many missing values
+
+For the estimation of protein-level abundances in the next notebook, we will use `limpa`. We do not need to exlcude
+peptides with any missing values for this. However, we still don't want to retain
+peptides with too many missing values, since these will not be very
+informative in estimating the protein-level quantification.
+
+Below, we inspect the most common patterns for the missing values.
+
+The missingness is sometimes consigned to all samples from a condition(s). It looks like the missingness is a mixture of missing at random (MAR) and missing at random (MNAR) and is likely partly due to falling below detection limits.
+
+
+
+```{r, fig.height=6, fig.width=8, warning=FALSE, message=FALSE, out.width='70%'}
+plot_missing_upset(lfq_qf, i='peptides_norm_hist')
+```
+
+Here, we'll set a limit of maximum 4/6 missing values per peptide.
+
+```{r}
+table(nNA(lfq_qf[['peptides_norm_hist']])$nNArows$nNA)
+
+lfq_qf[['peptides_filtered_missing']] <- QFeatures::filterNA(
+  lfq_qf[['peptides_norm_hist']], 4/6)
+
+biomasslmb:::message_parse(rowData(lfq_qf[['peptides_filtered_missing']]),
+                           'Leading.razor.protein',
+                           "Removing peptides with more than 4/6 missing values")
+
+
+
+```
+
+
+
+# Inspecting the number of peptides and proteins through the processing steps
+
+Now that we have performed all the filtering steps, it's helpful to visualise how many peptides/proteins were retained at each level of the processing. 
+
+## Samples per peptide
+
+We'll start by inspecting the number of peptides in each experiment. We set the row variables to be `Sequence` and `Modifications` so that we count the number of unique peptides.
+
+```{r, fig.height=7, , fig.width=7, fig.fullwidth=TRUE, out.width='75%', warning=FALSE, message=FALSE}
+
+
+rename_cols <- c('All peptides' = 'peptides_raw' ,
+                 'Quantified, contaminants removed' = 'peptides_filtered',
+                 'Max 4/6 missing values' = 'peptides_filtered_missing')
+
+rowvars <- c('Sequence', 'Modifications')
+rowDataNames(lfq_qf)[['peptides_raw']]
+
+samples_present <- get_samples_present(
+  lfq_qf[,,unname(rename_cols)], rowvars, rename_cols)
+
+plot_samples_present(samples_present, rowvars, breaks=seq(2,10,2)) + ylab('PSM')
+
+
+```
+
+### Samples per Protein
+
+Next, we'll use the same functions to inspect the number of proteins at each level of processing. We need to set the row variables to be just the `Leading.razor.protein` column.
+
+```{r, fig.height=7, , fig.width=7, fig.fullwidth=TRUE, out.width='75%', warning=FALSE, message=FALSE}
+
+
+rowvars_prot <- c('Leading.razor.protein')
+
+samples_present <- get_samples_present(lfq_qf, rowvars_prot, rename_cols)
+plot_samples_present(samples_present, rowvars_prot, breaks=seq(2,10,2))
+```
+
+
+
+
+
+```{r}
+output_dir <- here('notebooks/output')
+
+saveRDS(lfq_qf, here(output_dir, 'HALO_lfq_qf.rds'))
+```
+
+
+```{r}
+sessionInfo()
+```

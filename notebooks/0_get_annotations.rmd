@@ -1,0 +1,108 @@
+---
+title: "Obtain protein annotations"
+author: "Tom Smith"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+Here, we obtain IDR data and seqeuences for the proteins quantified. To save this needing to be re-run if there are changes in how the output is processed to protein-level abundances, we will obtain the feature data for all proteins detected in the evidence files.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+
+library(here)
+library(dplyr)
+library(tidyr)
+library(biomasslmb)
+library(QFeatures)
+library(uniprotREST)
+library(ggplot2)
+
+```
+
+
+  
+  
+```{r, warning=FALSE, message=FALSE}
+maxQuant_outfiles <- Sys.glob(here('raw/*/evidence.txt*'))
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+all_proteins <- maxQuant_outfiles %>% lapply(function(x){
+  read.delim(x) %>%
+  pull(Leading.razor.protein) %>% 
+  unique() %>%
+  strsplit(';') %>%
+  unlist() %>% unique()
+}) %>% unlist() %>% unique()
+
+length(all_proteins)
+```
+
+## Uniprot protein details
+
+Below, we obtain the protein details from Uniprot using the uniprotREST package.
+
+```{r, warning=FALSE, message=FALSE}
+uniprot2details <- uniprot_map(
+    all_proteins,
+    from='UniProtKB_AC-ID',
+    method='stream') %>%
+  dplyr::rename('UniprotID'=From) %>%
+  select(-Entry) %>%
+  mutate(Gene.Names.First=gsub(' .*','', Gene.Names))
+
+# Some UniprotIDs generate multiple rows. It looks like this is because they have been subsequently 'demerged'. Below, we merge them
+uniprot2details_unique <- uniprot2details %>%
+  group_by(UniprotID) %>%
+  summarise_all(.funs=function(x) paste(x, collapse=';'))
+
+saveRDS(uniprot2details_unique, here('external/uniprot2details_unique.rds'))
+```
+
+
+
+## GO terms
+
+Below we obtain the GO terms from Uniprot using the API and then we reformat the output before expanding the GO terms to include all parent terms too.
+
+```{r, warning=FALSE, message=FALSE}
+
+tempfilename <- tempfile()
+
+uniprot_map(
+  ids = all_proteins,
+  from = "UniProtKB_AC-ID",
+  method='stream',
+  to = "UniProtKB", compressed = TRUE,
+  format = "tsv", path = tempfilename,
+  fields = "go",
+) 
+
+go_res <- read.delim(tempfilename) %>% dplyr::rename(c('UNIPROTKB'='From'))
+
+file.remove(tempfilename)
+
+# The Uniprot API returns a data.frame with all the GO terms for each protein in a single column
+# Below, we separate each GO terms to be on a different row
+go_res <- go_res %>%
+  filter(Gene.Ontology..GO.!='') %>% separate_rows(Gene.Ontology..GO., sep = '; ') %>%
+  separate_wider_delim(Gene.Ontology..GO., ' [GO:', names=c('GO_desc', 'GO.ID')) %>%
+  mutate(GO.ID=paste0('GO:', gsub(']$', '', GO.ID)))
+
+# And then expand the GO terms so that all ancestor/parent terms are annotated to each protein
+# This is to avoid issues with GO over-representation testing packages only using 
+# the directly annotated terms and not the parent terms
+go_res_all <- get_ancestor_go(go_res)
+```
+
+
+
+
+Save to file for use in other notebooks.
+
+```{r}
+saveRDS(go_res_all, here('external/go_res_all.rds'))
+
+```
+
+
