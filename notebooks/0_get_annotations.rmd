@@ -4,7 +4,7 @@ author: "Tom Smith"
 date: "`r Sys.Date()`"
 output: pdf_document
 ---
-Here, we obtain IDR data and seqeuences for the proteins quantified. To save this needing to be re-run if there are changes in how the output is processed to protein-level abundances, we will obtain the feature data for all proteins detected in the evidence files.
+Here, we obtain uniprot details and GO annotations for the proteins quantified. To save this needing to be re-run if there are changes in how the output is processed to protein-level abundances, we will obtain the feature data for all proteins detected in the evidence files.
 
 ```{r, warning=FALSE, message=FALSE, echo=FALSE}
 
