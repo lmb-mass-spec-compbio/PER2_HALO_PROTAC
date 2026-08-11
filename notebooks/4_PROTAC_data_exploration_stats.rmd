@@ -171,7 +171,7 @@ type <- factor(exp_cond_phospho$type, levels=c('protein', 'phosphopeptide'))
 
 m_design_phospho <- model.matrix(~ condition * type)
 
-# same ID for phospho + total from the same sample
+# same ID for phospho + total from the same samples
 block <- interaction(condition, exp_cond_phospho$replicate)   
 
 # Estimate the correlation between measurements from the same block
