@@ -272,6 +272,20 @@ phospho_limma_results %>%
 
 print(p)
 ```
+```{r}
+table(dir=ifelse(phospho_limma_results$logFC>0, 'inc', 'dec'), sig=phospho_limma_results$adj.P.Val<0.05, over_1.1=abs(phospho_limma_results$logFC)>log2(1.1))
+
+phospho_limma_results %>%
+  filter(adj.P.Val<0.05) %>%
+  ggplot(aes(logFC)) +
+  geom_histogram(bins=100) +
+  theme_biomasslmb() +
+  labs(x='log2 FC (PROTAC vs DMSO)', y='Number of phosphosites') +
+  theme(strip.background = element_blank()) +
+  ggtitle('Significant phosphosites (FDR<5%)') +
+  geom_vline(xintercept = log2(1.25), colour='red', linetype='dashed') +
+  geom_vline(xintercept = -log2(1.25), colour='red', linetype='dashed')
+```
 
 ## Plot changes in phosphorylation for AKT1S1
 
@@ -340,6 +354,330 @@ p2 <- p + filter(to_plot, condition!='DMSO')
 print(p2)
 ggsave(plot=p2, here('results/plots/PROTAC_AKT1S1_phosphosite_changes.png'))
 ggsave(plot=p2, here('results/plots/PROTAC_AKT1S1_phosphosite_changes.pdf'))
+
+```
+```{r, fig.width=8}
+
+
+obj <- qfs$total
+poi <- 'Q96B36'
+experiments_to_plot =  c('psm_raw', 'psm_filtered_forSum')
+protein_id_col = "Leading.razor.protein"
+label_col = "Gene.Names.First"
+log2transform_cols = c('psm_raw', 'psm_filtered_forSum')
+alpha_assays = FALSE
+row_vars <- 'Sequence'
+
+
+rowData(qfs$total[['psm_raw']]) %>%
+  data.frame() %>% 
+  filter(Leading.razor.protein %in% poi)
+to_plot_pep <- obj[, , experiments_to_plot] %>% biomasslmb:::qfeatures_long(rowvars = c(protein_id_col, 
+    label_col, row_vars)) %>% data.frame()
+
+to_plot_prot <- obj[, , 'protein'] %>% biomasslmb:::qfeatures_long(rowvars = c(protein_id_col, 
+    label_col)) %>% data.frame()
+
+
+to_plot <- bind_rows(to_plot_prot, to_plot_pep) %>%
+  filter(!!sym(protein_id_col) %in%  poi) %>%
+  mutate(label = !!sym(label_col)) %>%
+  mutate(value = ifelse(assay %in% log2transform_cols, log2(value), value)) %>%
+  mutate(assay_order = factor(assay, levels = c(experiments_to_plot, 'protein')))
+
+to_plot <- to_plot %>%
+  merge(colData(obj), by.x='colname', by.y='row.names')
+
+ylab <- "Abundance (log2)"
+    
+p <- to_plot %>% 
+    ggplot(aes(x = paste(condition, replicate), y = value)) + geom_point() + 
+    geom_line(aes(group = rowname)) + facet_grid(assay_order ~ 
+    label, scales = "free_y") + theme_biomasslmb(border = FALSE, 
+    base_size = 12) + theme(axis.text.x = element_text(angle = 45, 
+    vjust = 1, hjust = 1, size = 8), strip.text.y = element_text(size = 10, 
+    angle = 0), strip.background = element_blank(), panel.spacing.x = unit(10, 
+    "mm")) + labs(x = "", y = ylab) +
+  aes(colour=Sequence) +
+  scale_colour_manual(values=get_cat_palette(7))
+
+p
+```
+
+
+```{r, fig.width=6, fig.height=6}
+
+mtor_substrates <- read.csv(here('raw/PROTAC/mTORC1_substrates_table1_expanded.csv'))
+
+
+mtor_substrates
+
+# highlight 
+highlight <- phospho_limma_results %>%
+  merge(mtor_substrates,
+        by.x=c('UniprotID', 'phospho_pos'),
+        by.y=c('Uniprot.ID', 'Phosphorylated.site.s.'))
+
+
+print(nrow(highlight))
+
+phospho_limma_results %>%
+  mutate(significant=adj.P.Val<0.1) %>%
+  ggplot(aes(logFC, -log10(P.Value))) +
+  geom_point(aes(fill=significant,
+             alpha=significant, size=significant),
+             colour='grey20', stroke=0.25, shape=21) +
+  geom_point(data=highlight, colour=get_cat_palette(2)[2]) +
+  theme_biomasslmb() +
+  scale_fill_manual(values=c('grey60', get_cat_palette(1)),
+                      name='Significant\n(FDR<10%)') +
+  scale_size_manual(values=c(0.5, 1), guide='none') +
+  scale_alpha_manual(values=c(0.1, 0.5), guide='none') +
+  labs(x='log2 FC (PROTAC vs DMSO)', y='-log10(p-value)') +
+  theme(strip.background = element_blank()) +
+  geom_text_repel(
+    data=highlight,
+    aes(label=paste(Gene.Names.First, gsub('.*_', '', phosphosite))),
+    max.overlaps = 50, size=3, min.segment.length =0, colour='black', force = 10) +
+  ggtitle('Phosphorylation') -> p
+
+print(p)
+
+
+mtor_substrates
+
+
+print(p)
+
+
+# highlight 
+highlight2 <- phospho_limma_results %>%
+  filter(UniprotID %in% unique(mtor_substrates$Uniprot.ID))
+
+
+mtor_substrates %>%
+  filter(Uniprot.ID %in% pull(filter(highlight2, adj.P.Val<0.1), UniprotID)) %>%
+  select(Substrate, Uniprot.ID, Phosphorylated.site.s., Function, Remarks) %>%
+  merge(distinct(select(highlight, Gene.Names.First, Gene.Names, UniprotID, Protein.names.y)),
+        by.x='Uniprot.ID', by.y='UniprotID')
+
+phospho_limma_results %>%
+  mutate(significant=adj.P.Val<0.1) %>%
+  ggplot(aes(logFC, -log10(P.Value))) +
+  geom_point(aes(fill=significant,
+             alpha=significant, size=significant),
+             colour='grey20', stroke=0.25, shape=21) +
+  geom_point(data=highlight2, colour=get_cat_palette(2)[2]) +
+  theme_biomasslmb() +
+  scale_fill_manual(values=c('grey60', get_cat_palette(1)),
+                      name='Significant\n(FDR<10%)') +
+  scale_size_manual(values=c(0.5, 1), guide='none') +
+  scale_alpha_manual(values=c(0.1, 0.25), guide='none') +
+  labs(x='log2 FC (PROTAC vs DMSO)', y='-log10(p-value)') +
+  theme(strip.background = element_blank()) +
+  geom_text_repel(
+    data=filter(highlight2, adj.P.Val<0.1),
+    aes(label=paste(Gene.Names.First, gsub('.*_', '', phosphosite))),
+    max.overlaps = 50, size=4, min.segment.length =0, colour='black', force = 10) +
+  ggtitle('Phosphorylation') -> p
+
+print(p)
+
+crosstab_poi_sig <- phospho_limma_results %>%
+  group_by(is_poi=ifelse(phosphosite %in% highlight2$phosphosite, 'mTORC1 substrate', 'Other'),
+           significant=adj.P.Val<0.1) %>%
+  tally() %>%
+  pivot_wider(names_from = significant, values_from=n, values_fill=0) %>%
+  tibble::column_to_rownames('is_poi')
+
+crosstab_poi_sig %>%
+  mutate(frac_sig=`TRUE`/(`TRUE`+`FALSE`))
+
+print(crosstab_poi_sig)
+fisher.test(crosstab_poi_sig)  
+```
+```{r}
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
+  dplyr::count(is_poi)
+
+
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(phosphosite %in% unique(highlight$phosphosite), 'mTORC1 substrate', 'Other')) %>%
+  ggplot(aes(abs(logFC), colour=is_poi)) +
+  geom_density() +
+  theme_biomasslmb() +
+  labs(x='log2 FC (PROTAC vs DMSO)', y='Density', colour='') +
+  scale_colour_manual(values=c(get_cat_palette(2)[2], 'grey60'))
+
+
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
+  ggplot(aes(abs(logFC), colour=is_poi)) +
+  geom_density() +
+  theme_biomasslmb() +
+  labs(x='log2 FC (PROTAC vs DMSO)', y='Density', colour='') +
+  scale_colour_manual(values=c(get_cat_palette(2)[2], 'grey60'))
+
+
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(phosphosite %in% unique(highlight$phosphosite), 'mTORC1 substrate', 'Other')) %>%
+  ks.test(abs(logFC) ~ is_poi, data=.)
+
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
+  ks.test(abs(logFC) ~ is_poi, data=.)
+
+
+```
+
+
+```{r, fig.width=10, fig.height=6}
+set.seed(0)
+
+
+mtor_substrates_updated <- openxlsx::read.xlsx(here('raw/PROTAC/mTORC1_substrates_Battaglioni2022_plus_2026update.xlsx')) %>%
+  data.frame()
+
+nrow(mtor_substrates)
+nrow(mtor_substrates_updated)
+merge(mtor_substrates, mtor_substrates_updated, by=c('Uniprot.ID', 'Phosphorylated.site.s.')) %>%
+  nrow()
+
+phospho_limma_results %>%
+  merge(mtor_substrates_updated,
+        by.x=c('UniprotID', 'phospho_pos'),
+        by.y=c('Uniprot.ID', 'Phosphorylated.site.s.')) %>%
+  select(Gene.Names.First, Entry.Name)
+
+# highlight 
+highlight_val <- phospho_limma_results %>%
+  merge(mtor_substrates_updated,
+        by.x=c('UniprotID', 'phospho_pos'),
+        by.y=c('Uniprot.ID', 'Phosphorylated.site.s.')) %>%
+  select(logFC, P.Value, adj.P.Val, Gene.Names.First, Entry.Name, phosphosite) %>%
+  mutate(type='in vitro validated')
+
+highlight_val2 <- phospho_limma_results %>%
+  filter(phosphosite %in% c('P51397_S2;S3', 'P51397_S49;S51')) %>%
+  select(logFC, P.Value, adj.P.Val, Gene.Names.First, Entry.Name, phosphosite) %>%
+  mutate(type='in vitro validated')
+
+highlight_val <- bind_rows(highlight_val, highlight_val2) %>%
+  distinct()
+
+highlight_all_sites_in_protein <- phospho_limma_results %>%
+  filter(UniprotID %in% unique(mtor_substrates$Uniprot.ID)) %>%
+  filter(!phosphosite %in% highlight_val$phosphosite) %>%
+  select(logFC, P.Value, adj.P.Val, Gene.Names.First, Entry.Name, phosphosite) %>%
+  mutate(type='other site on validated protein')
+
+highlight <- bind_rows(highlight_val, highlight_all_sites_in_protein) %>%
+  mutate(significant=adj.P.Val<0.1)
+
+
+highlight %>%
+  filter(Gene.Names.First=='AKT1S1') 
+phospho_limma_results %>%
+  filter(adj.P.Val<0.1) %>%
+  ggplot(aes(logFC, -log10(P.Value))) +
+  geom_point(colour='grey60', alpha=1, size=1, shape=20) +
+  geom_point(data = filter(phospho_limma_results, adj.P.Val>0.1),
+             colour='grey80', alpha=0.25, size=0.5, shape=20) +
+  
+  geom_point(data=filter(highlight, type=='in vitro validated'), colour=get_cat_palette(2)[2],
+             aes(alpha=significant), pch=16, size=4) +
+  geom_point(data=filter(highlight, type=='other site on validated protein'),
+             colour=get_cat_palette(2)[2],
+             fill='grey90',
+             aes(alpha=significant), pch=21, size=4) +
+  theme_biomasslmb(base_size = 20) +
+  scale_fill_manual(values=c(get_cat_palette(2)[2], 'grey90'), name='mTORC1 substrate') +
+  scale_size_manual(values=c(0.5, 1), guide='none') +
+  scale_alpha_manual(values=c(0.25, 1), guide='none') +
+  labs(x = expression(log[2]*" FC (PROTAC vs DMSO)"),
+     y = expression(-log[10]*"(p-value)")) +
+  theme(strip.background = element_blank()) +
+  geom_text_repel(
+    data=filter(highlight, Gene.Names.First =='DAP'|phosphosite %in% c('Q96B36_S183', 'Q96B36_T233', 'Q96B36_S247')),
+    aes(label=paste(sub('_HUMAN', '', Entry.Name), gsub('.*_', '', phosphosite))),
+    fontface = "bold",
+    max.overlaps = 50, size=5, min.segment.length = 0, colour='grey20', force = 20, nudge_x = 1) -> p
+
+print(p)
+
+ggsave(plot=p, here('results/plots/PROTAC_phospho_limma_results_mTORC1_substrates.png'))
+ggsave(plot=p, here('results/plots/PROTAC_phospho_limma_results_mTORC1_substrates.pdf'))
+
+
+crosstab_poi_sig <- phospho_limma_results %>%
+  group_by(is_poi=ifelse(phosphosite %in% highlight_val$phosphosite, 'mTORC1 substrate', 'Other'),
+           significant=adj.P.Val<0.1) %>%
+  tally() %>%
+  pivot_wider(names_from = significant, values_from=n, values_fill=0) %>%
+  tibble::column_to_rownames('is_poi')
+
+crosstab_poi_sig %>%
+  mutate(frac_sig=`TRUE`/(`TRUE`+`FALSE`))
+
+print(crosstab_poi_sig)
+fisher.test(crosstab_poi_sig)  
+
+crosstab_poi_sig <- phospho_limma_results %>%
+  group_by(is_poi=ifelse(phosphosite %in% highlight$phosphosite, 'mTORC1 substrate', 'Other'),
+           significant=adj.P.Val<0.1) %>%
+  tally() %>%
+  pivot_wider(names_from = significant, values_from=n, values_fill=0) %>%
+  tibble::column_to_rownames('is_poi')
+
+crosstab_poi_sig %>%
+  mutate(frac_sig=`TRUE`/(`TRUE`+`FALSE`))
+
+print(crosstab_poi_sig)
+fisher.test(crosstab_poi_sig)  
+```
+
+```{r}
+rowData(qfs$phospho[['psm_annot']]) %>%
+  data.frame() %>%
+  filter(Gene.Names.First=='DAP') %>%
+  select(Entry.Name, ptm_name, Phospho..STY..Probabilities) %>%
+  knitr::kable()
+```
+
+
+```{r}
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates_updated$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
+  count(is_poi)
+
+
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(phosphosite %in% unique(highlight$phosphosite), 'mTORC1 substrate', 'Other')) %>%
+  ggplot(aes(logFC, colour=is_poi)) +
+  geom_density() +
+  theme_biomasslmb() +
+  labs(x='log2 FC (PROTAC vs DMSO)', y='Density', colour='') +
+  scale_colour_manual(values=c(get_cat_palette(2)[2], 'grey60'))
+
+
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates_updated$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
+  ggplot(aes(logFC, colour=is_poi)) +
+  geom_density() +
+  theme_biomasslmb() +
+  labs(x='log2 FC (PROTAC vs DMSO)', y='Density', colour='') +
+  scale_colour_manual(values=c(get_cat_palette(2)[2], 'grey60'))
+
+
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(phosphosite %in% unique(highlight$phosphosite), 'mTORC1 substrate', 'Other')) %>%
+  ks.test(abs(logFC) ~ is_poi, data=.)
+
+phospho_limma_results %>%
+  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates_updated$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
+  ks.test(abs(logFC) ~ is_poi, data=.)
+
 
 ```
 

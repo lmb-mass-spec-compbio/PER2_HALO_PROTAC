@@ -198,6 +198,38 @@ qfs$phospho[[out_assay_name]] <- qfs$phospho[[out_assay_name]] %>%
 file.remove(proteome_fasta_filepath)
 ```
 
+## Removing PSMs with high co-isolation
+
+Co-isolation of other peptides within the MS1 isolation window compresses TMT
+ratios. MaxQuant reports the Parent Ion Fraction (`PIF`), the proportion of the
+ion current in the isolation window belonging to the target peptide. Below, we
+remove PSMs where more than 50% of the isolated signal came from other species.
+
+Note that `PIF` is `NA` for PSMs where no MS1 isotope pattern was assembled
+(`Type=='MSMS'`), so that purity could not be assessed. These are retained,
+since we have no evidence that they are co-isolated.
+
+```{r}
+for(qf in names(qfs)){
+
+  if(qf=='total'){
+    in_assay_name <- 'psm_filtered'
+  } else{
+    in_assay_name <- 'psm_annot'
+  }
+
+  out_assay_name <- 'psm_filtered_interference'
+
+  pif <- rowData(qfs[[qf]][[in_assay_name]])$PIF
+
+  qfs[[qf]][[out_assay_name]] <- qfs[[qf]][[in_assay_name]][is.na(pif)|pif>=0.5,]
+
+  biomasslmb:::message_parse(rowData(qfs[[qf]][[out_assay_name]]),
+                             "Leading.razor.protein",
+                             "Removing PSMs with co-isolation > 50%")
+}
+```
+
 ## Normalise
 
 Next, we normalise the PSM level intensities by performing diff.median normalisation within each plex.
@@ -205,15 +237,9 @@ Next, we normalise the PSM level intensities by performing diff.median normalisa
 ```{r, warning=FALSE, fig.show='hold', fig.show="hold", out.width="50%"}
 
 for(qf in names(qfs)){
-  
-  if(qf=='total'){
-    in_assay_name <- 'psm_filtered'
-    
-  } else{
-    in_assay_name <- 'psm_annot'
-  
-  }
-  
+
+  in_assay_name <- 'psm_filtered_interference'
+
   out_assay_name <- 'psm_filtered_norm'
 
   # Log2-transform, normalise, then back-transform
@@ -289,7 +315,7 @@ for(qf in names(qfs)){
   qfs[[qf]][[out_assay_name]] <- QFeatures::impute(
     qfs[[qf]][[out_assay_name]], method='MinProb')
   assay(qfs[[qf]][[out_assay_name]]) <- 2^assay(qfs[[qf]][[out_assay_name]])
-    
+
 
 }
 ```
@@ -311,8 +337,8 @@ for(qf in names(qfs)){
       group_col <- "prot_phos"
     }
 
-  qfs[[qf]] <- aggregateFeatures(qfs[[qf]], 
-                                 i = in_assay_name, 
+  qfs[[qf]] <- aggregateFeatures(qfs[[qf]],
+                                 i = in_assay_name,
                                  fcol = group_col,
                                  name = out_assay_name,
                                  fun = base::colSums)
@@ -323,7 +349,6 @@ for(qf in names(qfs)){
   qfs[[qf]][[out_assay_name]]
 }
   
-
 ```
 
 A final check that that the summarised abundances look sensible
@@ -371,6 +396,7 @@ for(qf in names(qfs)){
     rename_cols <- c(
       'PSMs - detected' = 'psm_raw',
       'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
+      'PSMs - filtered (co-isolation)' = 'psm_filtered_interference',
       'PSMs - filtered for summarisation' = 'psm_filtered_forSum')
 
   } else{
@@ -378,6 +404,7 @@ for(qf in names(qfs)){
       'PSMs - detected' = 'psm_raw',
       'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
       'PSMs - filtered (phosphosites confidently localised)' = 'psm_annot',
+      'PSMs - filtered (co-isolation)' = 'psm_filtered_interference',
       'PSMs - filtered for summarisation' = 'psm_filtered_forSum')
   }
     
@@ -412,15 +439,17 @@ for(qf in names(qfs)){
       rename_cols <- c(
         'PSMs - detected' = 'psm_raw',
         'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
+        'PSMs - filtered (co-isolation)' = 'psm_filtered_interference',
         'PSMs - filtered for summarisation' = 'psm_filtered_forSum',
         'Protein' = 'protein')
       } else{
         feature <- 'Phosphopeptides'
-        
+
         rename_cols <- c(
           'PSMs - detected' = 'psm_raw',
           'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
           'PSMs - filtered (phosphosites confidently localised)' = 'psm_annot',
+          'PSMs - filtered (co-isolation)' = 'psm_filtered_interference',
           'PSMs - filtered for summarisation' = 'psm_filtered_forSum',
           'Phosphopeptide' = 'phosphopeptide')
 
@@ -495,7 +524,7 @@ get_long_format_exp <- function(
     rowvars=c('Leading.razor.protein', 'Protein.names.y',
               'Gene.Names', 'Gene.Names.First')){
   
-  long_format_protein <- longFormat(
+  long_format_protein <- biomasslmb:::qfeatures_long(
     obj,
     colvars=colvars, 
     rowvars=rowvars) %>%
@@ -555,6 +584,14 @@ long_format_phosphopeptide_norm_to_protein <- long_format_protein %>%
 
 saveRDS(long_format_phosphopeptide_norm_to_protein,
         here(output_dir,'PROTAC_long_format_phosphopeptide_norm_to_protein.rds'))
+
+long_format_phosphopeptide_norm_to_protein %>%
+  select(UniprotID, phosphopeptide, ptm_positions_prot,
+         Gene.Names, Gene.Names.First, Protein.names=Protein.names.y,
+         condition, replicate, abundance.protein, abundance.phosphopeptide,
+         abundance_phosphopeptide_prot_norm) %>%
+write.table(file = here('results/PROTAC_long_format_phosphopeptide_norm_to_protein.tsv'),
+            quote=FALSE, row.names=FALSE, sep='\t')
 
   
 long_long_format_phosphopeptide_norm_to_protein <- long_format_phosphopeptide_norm_to_protein %>%

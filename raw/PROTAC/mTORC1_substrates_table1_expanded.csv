@@ -1,0 +1,108 @@
+Substrate,Uniprot ID,Phosphorylated site(s),Phosphorylated site(s) and adjacent residues,TOS motif,Purpose of phosphorylation,Function,Remarks
+4E-BP1,Q13541,T37,GDYSTTPGGTLFSTTPGGTR,FEMDI,Inhibitory,Translation regulation,Rapamycin insensitive
+4E-BP1,Q13541,T46,GDYSTTPGGTLFSTTPGGTR,FEMDI,Inhibitory,Translation regulation,Rapamycin insensitive
+4E-BP1,Q13541,S65,MECRNSPVTKTPPRDL,,Inhibitory,Translation regulation,Rapamycin sensitive
+4E-BP1,Q13541,T70,MECRNSPVTKTPPRDL,,Inhibitory,Translation regulation,Rapamycin sensitive
+ACINUS,Q9UKV3,S240,RAAKLSEGSQPAEE,,Unknown significance,EJC/splicing,
+ACINUS,Q9UKV3,S243,RAAKLSEGSQPAEE,,Unknown significance,EJC/splicing,
+AMBRA1,Q9C0C7,S52,VELPDSPRSTF,,Inhibitory,Autophagy,
+AMPKa1,Q13131,S356,FYLATSPPDSF,,Inhibitory,Signaling,
+AMPKa2,P54646,S345,FYLASSPPSGS,,Inhibitory,Signaling,
+AMPKa2,P54646,S377,PLIADSPKARC,,Specific activation,Glucose uptake,
+AR,P10275,S96,QGEDGSPQAHR,,Activating,Signaling,
+AS160,O60343,S666,AQGVRSPLLRQ,FEMDI,Unknown,Signaling,Sensitive to TOS mutation and rapamycin
+ATG13,O75143,S259,TSFSTSPPSQL,,Inhibitory,Autophagy,
+ATG14,Q6ZNE5,S3,MASPSGKG,,Inhibitory,Autophagy,
+ATG14,Q6ZNE5,S223,PADVSSESDSAMTSSTVSKLA,,Inhibitory,Autophagy,
+ATG14,Q6ZNE5,T233,PADVSSESDSAMTSSTVSKLA,,Inhibitory,Autophagy,
+ATG14,Q6ZNE5,S383,LMYLVSPSSEHS,,Inhibitory,Autophagy,
+ATG14,Q6ZNE5,S440,WENLPSPRFCD,,Inhibitory,Autophagy,
+BACH2,Q9BYV9,S510,KVCPRSPPLET,,Inhibitory,Transcriptional regulator,
+BACH2,Q9BYV9,S536,DGSGGSPCSLP,,Inhibitory,Transcriptional regulator,
+CLIP1,P30622,Multiple sites,,,Activating,Microtubule organization,
+CRTC2,Q53ET0,S136,SPAYLSPPPES,,Inhibitory,SREBP1 processing,
+DAP1,P51397,S3,MSSPPEGK,,Inhibitory,Autophagy,
+DAP1,P51397,S51,EWESPSPPKPT,,Inhibitory,Autophagy,
+DEPTOR,Q8TB45,S293,GYFSSSPTLSSSPPVLC,,Degradation,Signaling,mTORC1 regulation
+DEPTOR,Q8TB45,T295,GYFSSSPTLSSSPPVLC,,Degradation,Signaling,mTORC1 regulation
+DEPTOR,Q8TB45,S299,GYFSSSPTLSSSPPVLC,,Degradation,Signaling,mTORC1 regulation
+eEF2K,O00418,S78,GSPANSFHFKE,,Inhibitory,Translation regulation,
+eEF2K,O00418,S396,DSLPSSPSSAT,,Inhibitory,Translation regulation,
+eIF2B,P20042,S2,MSGDEMI FDIDE,,Activating,Translation regulation,
+eIF2B,P20042,S67,RKKDASDDLDD,,Activating,Translation regulation,
+eIF4E,P06730,S209,ATKSGSTTKNR,,Activating,Translation regulation,TPTPNPP Raptor-binding motif
+ERa,P03372,S104,PLNSVSPSPLMLL,FPATV,Activating,Signaling,
+ERa,P03372,S106,PLNSVSPSPLMLL,FPATV,Activating,Signaling,
+GRASP55,Q9H8Y8,Undetermined,,,Localization,Protein transport,
+GRB10,Q13322-1,S474,MNILGSQSPLHPS,,Protein stabilization,Signaling,
+GRB10,Q13322-1,S476,MNILGSQSPLHPS,,Protein stabilization,Signaling,
+HSF1,Q00613,S326,VDTLLSPTALI,,Activating,Transcription,
+IMP2,Q9Y6M1,S162,DEEVSSPSPPQRA,,Activating,Translation regulation,
+IMP2,Q9Y6M1,S164,DEEVSSPSPPQRA,,Activating,Translation regulation,
+IRS1,P35568-1,S422,DGGFISSDEYGS,,Protein degradation,Signaling,
+IRS1,P35568-1,S423,DGGFISSDEYGS,,Protein degradation,Signaling,
+IRS1,P35568-1,S636,DYMPMSPKSVSAPQ,,Protein degradation,Signaling,SAIN domain binding to Raptor
+IRS1,P35568-1,S639,DYMPMSPKSVSAPQ,,Protein degradation,Signaling,SAIN domain binding to Raptor
+ISCU,Q9H1K1,S14,LRRAASALLLR,,Protein stabilization,Protein folding,
+JMJD1C,Q15652,T505,VSRPPTPKCVI,,Activating,Histone demethylase,
+KAP1,Q13263,S824,GAGLSSQELSG,,Inhibitory,Transcriptional repressor,
+LARP1,Q6PKG0,26 S/T residues,,,Activating,TOP mRNA translation,
+LIPIN1,Q14693-3,S106,MHLATSPILSE,,Localization,Lipid metabolism,Rapamycin sensitive
+LIPIN1,Q14693-3,S470,RSANQSPQSVG,,Localization,Lipid metabolism,Rapamycin insensitive
+MAF1,Q9H063,S60,VLEALSPPQTSGLSPSRLSKSQGGEE,,Inhibitory,RNA polIII repressor,
+MAF1,Q9H063,S68,VLEALSPPQTSGLSPSRLSKSQGGEE,,Inhibitory,RNA polIII repressor,
+MAF1,Q9H063,S75,VLEALSPPQTSGLSPSRLSKSQGGEE,,Inhibitory,RNA polIII repressor,
+MFN2,O95140,S200,LVLMDSPGIDV,,Activating,Mitochondrial fusion,
+OTUD5,Q96G74-5,S323,EPIRVSYHRNIHYNSVVNPN,,Protein stabilization,Deubiquitination,mTORC1 and mTORC2 regulation
+OTUD5,Q96G74-5,S332,EPIRVSYHRNIHYNSVVNPN,,Protein stabilization,Deubiquitination,mTORC1 and mTORC2 regulation
+OTUD5,Q96G74-5,S503,ADRATSPLVSL,,Activation,Deubiquitination,
+NRBF2,Q96F24,S113,DAEGQSPLSQKYSPSTEK,,Inhibitory,Autophagy,
+NRBF2,Q96F24,S120,DAEGQSPLSQKYSPSTEK,,Inhibitory,Autophagy,
+p300,Q09472,S2271,QQQMGSPVQPNPMSPQQHM,,Activating,Protein acetylation,
+p300,Q09472,S2279,QQQMGSPVQPNPMSPQQHM,,Activating,Protein acetylation,
+p300,Q09472,S2291,PNQAQSPHLQG,,Activating,Protein acetylation,
+p300,Q09472,S2315,PQPVPSPRPQS,,Activating,Protein acetylation,
+p53,P04637,S15,VEPPLSQETFS,,Protein stabilization,Tumor suppressor,mTORC1 & mTORC2 dependent
+p62,Q13501-1,S349,KEVDPSTGELQ,,Inhibitory,Autophagy,
+PACER,Q9H714,S157,GILATSPYPET,,Inhibitory,Autophagy,
+PASK,Q96RG2,T640,GLSFGTPTLDEPW,,Activating,Signaling,
+PASK,Q96RG2,T642,GLSFGTPTLDEPW,,Activating,Signaling,
+PASK,Q96RG2,S949,RLFLASLPGSTHSTAAEL,,Activating,Signaling,
+PASK,Q96RG2,S953,RLFLASLPGSTHSTAAEL,,Activating,Signaling,
+PASK,Q96RG2,S956,RLFLASLPGSTHSTAAEL,,Activating,Signaling,
+PIP4Kg,Q8TBX8,S324,PALVGSYGTSPEGIG,,Inhibitory,Signaling,mTORC1 regulation
+PIP4Kg,Q8TBX8,S328,PALVGSYGTSPEGIG,,Inhibitory,Signaling,mTORC1 regulation
+PRAS40,Q96B36,S183,QQYAKSLPVSV,FVMDE,Substrate competition,Signaling,mTORC1 regulator
+PRAS40,Q96B36,S212,NGPPSSPDLDRIAASMRALV,,Inhibitory,Signaling,S212 rapamycin insensitive
+PRAS40,Q96B36,S221,NGPPSSPDLDRIAASMRALV,,Inhibitory,Signaling,S212 rapamycin insensitive
+RAG-C,Q9HB90,S21,YGAADSFPKDF,,mTORC1 destabilization,Signaling,Rapamycin insensitive
+RAPTOR,Q8N122,S859,SSLTQSAPASPTNKG,,Activating,Signaling,mTORC1 core component
+RAPTOR,Q8N122,S863,SSLTQSAPASPTNKG,,Activating,Signaling,mTORC1 core component
+S6K1,P23443-2,S371,QTPVDSPDDST,FDIDL,Priming,Signaling/translation,
+S6K1,P23443-2,T389,VFLGFTYVAPS,,Activating,Signaling/translation,
+SENP3,Q9H4L4,S25,IPPAYSSPRRER,,Nucleolar localization,Ribosome biogenesis,
+SENP3,Q9H4L4,S26,IPPAYSSPRRER,,Nucleolar localization,Ribosome biogenesis,
+SENP3,Q9H4L4,S141,LLYSKSTSLTFHWKL,,Nucleolar localization,Ribosome biogenesis,
+SENP3,Q9H4L4,T142,LLYSKSTSLTFHWKL,,Nucleolar localization,Ribosome biogenesis,
+SENP3,Q9H4L4,T145,LLYSKSTSLTFHWKL,,Nucleolar localization,Ribosome biogenesis,
+SIRT1,Q96EB6,S47,PGLERSPGEPG,FDVEL,Inhibitory,Protein deacetylation,
+SOD1,P00441,T40,SIKGLTEGLHG,,Inhibitory,ROS detoxification,
+STAT3,P40763,S727,IDLPMSPRTLD,,Activating,Signaling,
+TAU,P10636-8,S214,RSRTPSLPTPP,,Aggregation,Microtubule organization,
+TAU,P10636-8,T231,VAVVRTPPKSP,,Aggregation,Microtubule organization,
+TAU,P10636-8,S356,QSKIGSLDNIT,,Aggregation,Microtubule organization,
+TFEB,P19484,S122,PPPAASPGVRA,,Localization,Transcription factor,
+TFEB,P19484,S142,NSAPNSPMAML,,Localization,Transcription factor,Rapamycin insensitive
+TFEB,P19484,S211,GVTSSSCPADL,,Localization,Transcription factor,
+TFE3,P19532,S321,ITVSNSCPAEL,,Inhibitory,Transcription factor,
+TRPML1,Q9GZU1,S572,CGRDPSEEHSLLVN,,Inhibitory,Autophagy,
+TRPML1,Q9GZU1,S576,CGRDPSEEHSLLVN,,Inhibitory,Autophagy,
+ULK1,O75385,S757,VFTVGSPPSGS,,Inhibitory,Autophagy,
+USP20,Q9Y2K6,S132,ADEGESESEDDDL,,Activating,Deubiquitination,
+USP20,Q9Y2K6,S134,ADEGESESEDDDL,,Activating,Deubiquitination,
+UVRAG,Q9P2Y5,S498,SGGIPSPDKGH,,Repressor activation,Autophagy,
+UVRAG,Q9P2Y5,S550,TSLSSSLDTSL,,Activating,Autophagy,
+UVRAG,Q9P2Y5,S571,EDLVGSLNGGH,,Activating,Autophagy,
+VAMP8,Q9BV40,T48,HLRNKTEDLEA,,Inhibitory,Autophagy,
+WIPI2,Q9Y4P8-4,S395,TYVPSSPTRLA,,Degradation,Autophagy,
+ZNRF2,Q8NHG8,S145,RLVIGSLPAHL,,Translocation,Signaling,mTORC1 regulation

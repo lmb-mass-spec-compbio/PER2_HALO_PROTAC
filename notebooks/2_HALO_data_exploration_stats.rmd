@@ -267,6 +267,7 @@ highlight_clock <- limpa_results %>%
   mutate(significant=adj.P.Val<0.05 & logFC>0)
   
 highlight_mtor <- limpa_results %>%
+  tibble::rownames_to_column('Leading.razor.protein') %>%
     filter(Gene.Names.First %in% union(mtor_proteins_to_highlight$`...1`,
                                      mtor_proteins_to_highlight$`...2`) |
         Leading.razor.protein %in% mtor_proteins_to_highlight$`...3`) %>%
@@ -275,7 +276,6 @@ highlight_mtor <- limpa_results %>%
 p <- limpa_results %>%
   filter(is.finite(P.Value)) %>%
   mutate(significant=adj.P.Val<0.05 & logFC>0) %>%
-  bind_rows(.id='enrichment_method') %>%
   ggplot(aes(logFC, -log10(P.Value), alpha=significant, size=significant)) +
   geom_point(stroke=0.25, shape=20, aes(colour=significant)) +
   geom_point(size=2, pch=21, fill=get_cat_palette(1), data=highlight_clock) +
@@ -302,6 +302,7 @@ ggsave(here(plots_dir, 'limpa_volcano_per2h_vs_halo.png'))
 ggsave(here(plots_dir, 'limpa_volcano_per2h_vs_halo.pdf'))
 
 limpa_results %>%
+  tibble::rownames_to_column('Leading.razor.protein') %>%
   select(Leading.razor.protein, Entry.Name, Protein.names, Gene.Names=Gene.Names.y,
          Gene.Names.First, NPeptides, logFC, CI.L, CI.R, AveExpr,
          P.Value, adj.P.Val) %>%
