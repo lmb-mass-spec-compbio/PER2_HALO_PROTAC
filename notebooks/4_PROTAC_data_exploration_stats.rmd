@@ -48,6 +48,7 @@ long_format_protein <- readRDS(
 long_long_format_phosphopeptide_norm_to_protein <- readRDS(
   here(output_dir, 'PROTAC_long_long_format_phosphopeptide_norm_to_protein.rds'))
 
+uniprot2details_unique <- readRDS(here('external/uniprot2details_unique.rds'))
 
 ```
 
@@ -356,6 +357,135 @@ ggsave(plot=p2, here('results/plots/PROTAC_AKT1S1_phosphosite_changes.png'))
 ggsave(plot=p2, here('results/plots/PROTAC_AKT1S1_phosphosite_changes.pdf'))
 
 ```
+
+```{r, fig.width=10, fig.height=5}
+phoi <- c('P51397_S2;S3', 'P51397_S49;S51', 'Q96B36_S183', 'Q96B36_T233', 'Q96B36_S247')
+
+to_plot <- long_long_format_phosphopeptide_norm_to_protein %>%
+  filter(phosphopeptide %in% phoi, type=='phosphopeptide_prot_norm')
+
+DMSO_abundances <- to_plot %>%
+  filter(condition=='DMSO') %>%
+  group_by(prot_phos) %>%
+  summarise(abundance=mean(abundance))
+
+to_plot <- to_plot %>%
+  merge(uniprot2details_unique[c('UniprotID', 'Entry.Name')], by.x='UniprotID', by.y='UniprotID') %>%
+  merge(DMSO_abundances, by='prot_phos', suffix=c('', '_DMSO')) %>%
+  mutate(abundance_diff=abundance - abundance_DMSO) %>%
+  group_by(condition, prot_phos) %>%
+  mutate(mean_abundance_diff=mean(abundance_diff)) %>%
+  arrange(desc(mean_abundance_diff)) %>%
+  mutate(ptm_name_facet=sprintf('%s\n%s', sub('_HUMAN', '', Entry.Name), sub('; ', ';', ptm_name)))
+
+to_plot$ptm_name_facet <- factor(to_plot$ptm_name_facet,
+                                 levels=unique(to_plot$ptm_name_facet))
+
+
+val_sites <- phoi[1:3]
+
+p <- to_plot %>%
+  mutate(val=ifelse(phosphopeptide %in% val_sites, '\nin vitro validated\n', 'Other site on\nvalidated protein')) %>%
+  filter(condition!='DMSO') %>%
+  ggplot(aes(ptm_name_facet, abundance_diff, fill=val)) +
+  geom_point(colour=get_cat_palette(2)[2], stroke=0.5, shape=21, size=5) +
+  scale_fill_manual(values=c(get_cat_palette(2)[2], 'grey95'), name='') +
+  stat_summary(fun.min=mean, fun.max=mean, geom='errorbar',
+               linewidth=1, width=0.2, colour='grey20') +
+  theme_biomasslmb(aspect_square = FALSE, base_size = 20) +
+  labs(x='', y=expression(Log[2]*FC~"(PROTAC/DMSO)"))  +
+  facet_grid(.~val, scales='free_x', space='free_x') +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank(),
+        panel.spacing = unit(10, 'mm'),
+        strip.text.x=element_text(vjust=1, hjust=0),
+        plot.title = element_text(hjust=0.5)) +
+  theme(strip.text.x=element_blank()) +
+  ylim(0, NA)
+
+print(p)
+
+ggsave(plot=p, here('results/plots/PROTAC_AKT1S1_DAP1_phosphosite_changes_selected.png'))
+ggsave(plot=p, here('results/plots/PROTAC_AKT1S1_DAP1_phosphosite_changes_selected.pdf'))
+
+
+
+```
+```{r, fig.width=7, fig.height=5}
+phoi <- c('P51397_S2;S3', 'P51397_S49;S51', 'Q96B36_S183')
+
+to_plot <- long_long_format_phosphopeptide_norm_to_protein %>%
+  filter(phosphopeptide %in% phoi, type=='phosphopeptide_prot_norm')
+
+DMSO_abundances <- to_plot %>%
+  filter(condition=='DMSO') %>%
+  group_by(prot_phos) %>%
+  summarise(abundance=mean(abundance))
+
+to_plot <- to_plot %>%
+  merge(uniprot2details_unique[c('UniprotID', 'Entry.Name')], by.x='UniprotID', by.y='UniprotID') %>%
+  merge(DMSO_abundances, by='prot_phos', suffix=c('', '_DMSO')) %>%
+  mutate(abundance_diff=abundance - abundance_DMSO) %>%
+  group_by(condition, prot_phos) %>%
+  mutate(mean_abundance_diff=mean(abundance_diff)) %>%
+  arrange(desc(mean_abundance_diff)) %>%
+  mutate(ptm_name_facet=sprintf('%s\n%s', sub('_HUMAN', '', Entry.Name), sub('; ', ';', ptm_name)))
+
+to_plot$ptm_name_facet <- factor(to_plot$ptm_name_facet,
+                                 levels=unique(to_plot$ptm_name_facet))
+
+
+val_sites <- phoi[1:3]
+
+p <- to_plot %>%
+  #filter(condition!='DMSO') %>%
+  ggplot(aes(ptm_name_facet, 2^abundance_diff, fill=condition, group=interaction(condition, ptm_name_facet))) +
+  geom_point(stroke=1, shape=21, size=5, position=position_dodge(width=0.5), colour='grey40') +
+  scale_fill_manual(values=c('grey20', get_cat_palette(2)[2]), name='') +
+  stat_summary(fun.min=mean, fun.max=mean, geom='errorbar',
+               linewidth=1, width=0.4, colour='grey20',
+               position=position_dodge(width=0.5)) +
+  theme_biomasslmb(aspect_square = FALSE, base_size = 20) +
+  labs(x='', y="Phosphopeptide abundance\n(relative to DMSO)")  +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank(),
+        panel.spacing = unit(10, 'mm'),
+        strip.text.x=element_text(vjust=1, hjust=0),
+        plot.title = element_text(hjust=0.5)) +
+  theme(strip.text.x=element_blank()) + scale_y_continuous(limits=c(0.8, NA),breaks=seq(0.8, 2.2,0.2))
+
+print(p)
+
+ggsave(plot=p, here('results/plots/PROTAC_AKT1S1_DAP1_phosphosite_changes_selected.png'))
+ggsave(plot=p, here('results/plots/PROTAC_AKT1S1_DAP1_phosphosite_changes_selected.pdf'))
+
+```
+
+```{r, fig.width=7, fig.height=5}
+p <- to_plot %>%
+  ggplot(aes(ptm_name_facet, abundance, colour=condition, group=interaction(condition, ptm_name_facet))) +
+  geom_point(stroke=0.5, shape=16, size=5, position=position_dodge(width=0.5)) +
+  scale_colour_manual(values=get_cat_palette(2), name='') +
+  stat_summary(fun.min=mean, fun.max=mean, geom='errorbar',
+               linewidth=1, width=0.2, colour='grey20') +
+  theme_biomasslmb(aspect_square = FALSE, base_size = 20) +
+  labs(x='', y="Phosphopeptide abundance\n(normalised to protein)")  +
+  theme(strip.background = element_blank(),
+        strip.text = element_blank(),
+        panel.spacing = unit(10, 'mm'),
+        strip.text.x=element_text(vjust=1, hjust=0),
+        plot.title = element_text(hjust=0.5)) +
+  theme(strip.text.x=element_blank()) #+ scale_y_continuous(limits=c(1, NA),breaks=seq(1,2.25,0.25))
+
+print(p)
+
+
+long_long_format_phosphopeptide_norm_to_protein %>%
+  ggplot(aes(abundance, colour=type)) +
+  geom_density() +
+  theme_biomasslmb()
+```
+
 ```{r, fig.width=8}
 
 
