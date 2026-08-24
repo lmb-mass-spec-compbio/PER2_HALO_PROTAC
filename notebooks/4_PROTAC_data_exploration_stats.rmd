@@ -2,10 +2,46 @@
 title: "PER2-PROTAC: Data exploration and statistical testing"
 author: "Tom Smith"
 date: "`r Sys.Date()`"
-output: pdf_document
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
 ---
 
-Here, we explore the protein-level quantitative data and perform statistical testing to identify phosphorylation changes upon PROTAC treatment.
+# Purpose
+
+This notebook takes the normalised protein and phosphopeptide abundances produced in notebook 3 and tests whether PROTAC-induced degradation of PER2 changes total protein abundance and, in particular, mTORC1 substrate phosphorylation. It performs statistical testing for both total protein abundance and protein-normalised phosphorylation, then explores the phosphorylation results against reference lists of known mTORC1 substrates to ask whether PER2 degradation preferentially affects mTORC1 substrate phosphosites.
+
+Two ideas recur throughout and are worth stating up front:
+
+- **Very few proteins change in total abundance.** The PROTAC degrades PER2 itself, but does not appreciably change the abundance of most other proteins over the timescale of this experiment; the phosphoproteome is where the more substantial and more numerous changes are seen.
+- **Phosphorylation normalised to protein.** A change in a phosphopeptide's abundance could simply reflect a change in the abundance of its parent protein. To isolate genuine changes in *phosphorylation state*, the phospho test models the protein and phosphopeptide measurements jointly (a `type` factor) and reads off the `condition:type` interaction — the PROTAC effect on phosphorylation *over and above* its effect on the total protein.
+
+**Input:**
+
+- `notebooks/output/PROTAC_qfs.rds`, `notebooks/output/PROTAC_long_format_protein.rds` and `notebooks/output/PROTAC_long_long_format_phosphopeptide_norm_to_protein.rds` from notebook 3.
+- `external/uniprot2details_unique.rds` from notebook 0.
+- `raw/PROTAC/mTORC1_substrates_table1_expanded.csv` — a reference table of known mTORC1 substrates and their phosphosites.
+- `raw/PROTAC/mTORC1_substrates_Battaglioni2022_plus_2026update.xlsx` — the same substrate reference with additional, more recent substrates added.
+
+**Output:**
+
+- `results/PROTAC_phospho_limma_results.tsv` (and matching `.rds` in `notebooks/output/`) — the phosphosite-level statistical testing results, for every phosphosite.
+- `results/plots/PROTAC_AKT1S1_phosphosite_changes.{png,pdf}` and `..._selected.{png,pdf}` — per-sample phosphorylation change plots for AKT1S1, an mTORC1 substrate with several significantly changing sites.
+- `results/plots/PROTAC_AKT1S1_DAP1_phosphosite_changes_selected.{png,pdf}` — a comparison of *in vitro* validated AKT1S1/DAP1 sites against other sites on the same proteins. This filename is produced by two different chunks below (a log2 fold-change version and a linear relative-abundance version); the file on disk reflects whichever was rendered last.
+- `results/plots/PROTAC_phospho_limma_results_mTORC1_substrates.{png,pdf}` — the manuscript volcano plot highlighting mTORC1 substrate phosphosites.
+
+**Analysis:**
+
+1. **Data exploration** — PCA of the protein and phosphopeptide data, to confirm the two conditions separate as expected before proceeding to statistical testing.
+2. **Protein statistical testing** — fit `~condition` with `limma`, using `treat()` to additionally require a fold change significantly greater than 1.25x, since we expect only a small number of proteins (predominantly PER2 itself) to change substantially in abundance.
+3. **Phosphopeptide statistical testing** — model protein and phosphopeptide measurements jointly with `~condition*type` (blocking on the paired protein/phosphopeptide measurements from the same sample) and test the `condition:type` interaction, i.e. the PROTAC effect on phosphorylation after accounting for any change in protein abundance.
+4. **Result summaries** — the overall number and direction of significant phosphosite changes, a volcano plot, and detailed per-site plots for AKT1S1 (and, for validation purposes, DAP1), two proteins with multiple significantly changing, well-characterised mTORC1-regulated phosphosites.
+5. **mTORC1 substrate enrichment** — an exploratory, then a more refined, comparison of phosphosite fold changes against reference lists of known mTORC1 substrates, testing whether substrate phosphosites are disproportionately represented among the significant changes.
+6. **Export** — write the phosphosite-level statistics table to `results/`.
+
+**How to read the results:** significance for the primary phosphosite testing is assessed at 5% FDR (`adj.P.Val < 0.05`) in the early result-summary sections, but the mTORC1 substrate enrichment sections (from the volcano plot with mTORC1 substrates highlighted onwards) use a more permissive 10% FDR threshold, reflecting the smaller number of substrate phosphosites available to test against and the exploratory nature of that analysis. Positive log2 fold-changes indicate higher phosphorylation (or protein abundance) in PROTAC relative to DMSO.
 
 # Setup
 
@@ -69,8 +105,8 @@ for(qf in names(qfs)){
     assay_name <- 'phosphopeptide'
     feature <- 'Phosphopeptide'
   }
-  
-  
+
+
   print(plot_pca(
     qfs[[qf]], i=assay_name, colour_by = 'condition', shape='replicate') +
       ggtitle(feature))
@@ -83,7 +119,7 @@ for(qf in names(qfs)){
 
 ## Protein
 
-First, we'll perform statistical testing to compare the conditions (PROTAC vs DMSO) for total protein abundance
+First, we'll perform statistical testing to compare the conditions (PROTAC vs DMSO) for total protein abundance. Alongside the standard `eBayes` moderation, we also fit a `treat()` model, which tests against a minimum fold-change threshold (here, 1.25x) rather than a null of exactly zero change. This is appropriate here since we are not primarily interested in detecting arbitrarily small but statistically significant changes in abundance across the whole proteome, only in changes large enough to plausibly reflect a genuine biological consequence of PER2 degradation; `treat()` is applied to the `lmFit` output directly, without a prior `eBayes` call.
 
 ```{r, out.width='50%', warning=FALSE, message=FALSE, fig.show='hold'}
 
@@ -95,13 +131,13 @@ m_design <- model.matrix(~condition)
 fit_model <- lmFit(object = assay(qfs$total[['protein']]), design = m_design)
 
 ## Update the model using the limma eBayes algorithm
-final_model <- eBayes(fit = fit_model, 
+final_model <- eBayes(fit = fit_model,
                       trend = TRUE,
                       robust = TRUE)
 
 ## Add TREAT to final model to perform fold-change thresholding for contrasts
 # require |FC| significantly over 1.25x
-final_model_treat <- treat(fit_model, fc=1.25, trend=TRUE, robust=TRUE)  
+final_model_treat <- treat(fit_model, fc=1.25, trend=TRUE, robust=TRUE)
 
 ## QC plot to assess if there is a trend between abundance and variance, as expected
 plotSA(fit = final_model,
@@ -110,8 +146,8 @@ plotSA(fit = final_model,
 
 ## Format results
 prot_limma_results <- topTreat(
-  fit = final_model_treat,   
-  coef = 'conditionPROTAC', 
+  fit = final_model_treat,
+  coef = 'conditionPROTAC',
   adjust.method = "BH",    # Method for multiple hypothesis testing
   number = Inf) %>%        # Print results for all proteins
   tibble::rownames_to_column("Protein") %>%
@@ -119,11 +155,11 @@ prot_limma_results <- topTreat(
         by.x='Protein', by.y='row.names', all.x=TRUE) %>%
   arrange(P.Value)
 
-## Check distribution of p-values. Because we are using treat, we don't expect a 
+## Check distribution of p-values. Because we are using treat, we don't expect a
 ## uniform distribution under the null, but rather a peak near 1.
 p <- prot_limma_results %>%
   as_tibble() %>%
-  ggplot(aes(x = P.Value)) + 
+  ggplot(aes(x = P.Value)) +
   geom_histogram() +
   theme_biomasslmb()
 
@@ -145,14 +181,14 @@ prot_limma_results %>%
   knitr::kable()
 ```
 
-OK, so very few proteins have a significant change in abundance!
+Very few proteins have a significant change in abundance.
 
 
 
 
-### Phosphopeptide statistical testing
+## Phosphopeptide statistical testing
 
-Next, we perform statistical testing for the phosphopeptide data, comparing PROTAC vs DMSO while accounting for the matched protein abundance measurements.
+Next, we perform statistical testing for the phosphopeptide data, comparing PROTAC vs DMSO while accounting for the matched protein abundance measurements. The data matrix below has one column per condition/replicate/type combination (`type` being `protein` or `phosphopeptide`), so each phosphosite's row includes both its own phosphopeptide abundance and the abundance of its parent protein for the same samples. Fitting `~condition * type` and testing the `condition:type` interaction coefficient asks whether the PROTAC effect differs between the phosphopeptide and protein measurements — i.e. whether phosphorylation changes beyond what is explained by any change in protein abundance. Since the protein and phosphopeptide measurements for a given sample are not independent (they derive from the same biological replicate), we block on `condition:replicate` and estimate the within-block correlation with `duplicateCorrelation` before fitting.
 
 ```{r}
 # Create data matrix for modelling
@@ -173,7 +209,7 @@ type <- factor(exp_cond_phospho$type, levels=c('protein', 'phosphopeptide'))
 m_design_phospho <- model.matrix(~ condition * type)
 
 # same ID for phospho + total from the same samples
-block <- interaction(condition, exp_cond_phospho$replicate)   
+block <- interaction(condition, exp_cond_phospho$replicate)
 
 # Estimate the correlation between measurements from the same block
 corfit <- duplicateCorrelation(as.matrix(to_model_phospho),
@@ -184,7 +220,7 @@ limma_fit_phospho <- lmFit(
   as.matrix(to_model_phospho), m_design_phospho, block=block, correlation=corfit$consensus)
 
 # Update the model using the limma eBayes algorithm
-limma_fit_phospho_eb <- eBayes(limma_fit_phospho, trend=TRUE, robust=TRUE)  
+limma_fit_phospho_eb <- eBayes(limma_fit_phospho, trend=TRUE, robust=TRUE)
 
 # QC plot to assess if there is a trend between abundance and variance, as expected,
 # and if the limma 'trend' captures this
@@ -215,7 +251,7 @@ saveRDS(phospho_limma_results, here(output_dir, 'PROTAC_phospho_limma_results.rd
 
 ## How many phosphosites have a significant change in abundance?
 
-Below, we summarise how many phosphosites have a significant change in abundance (FDR<5%)
+Below, we summarise how many phosphosites have a significant change in abundance (FDR<5%), and how the balance of increased vs decreased sites differs between serine/threonine and tyrosine phosphorylation.
 
 ```{r, out.width='50%'}
 table(ifelse(phospho_limma_results$adj.P.Val<0.05, 'Significant', 'Not significant'),
@@ -243,7 +279,9 @@ phospho_limma_results %>%
   theme(strip.background = element_blank())
 ```
 
-Below, we make a volcano plot for the statistical test results
+## Volcano plot
+
+Below, we make a volcano plot for the statistical test results, labelling the 10 most significant phosphosites in each direction of change.
 
 ```{r, fig.width=6, fig.height=6}
 # highlight top 10 significant proteins per genotype
@@ -273,6 +311,9 @@ phospho_limma_results %>%
 
 print(p)
 ```
+
+The plots below examine the magnitude of significant changes in more detail: a crosstabulation against a 1.1-fold change threshold, and the distribution of fold changes among significant phosphosites relative to the 1.25-fold change threshold used elsewhere in this notebook.
+
 ```{r}
 table(dir=ifelse(phospho_limma_results$logFC>0, 'inc', 'dec'), sig=phospho_limma_results$adj.P.Val<0.05, over_1.1=abs(phospho_limma_results$logFC)>log2(1.1))
 
@@ -290,7 +331,7 @@ phospho_limma_results %>%
 
 ## Plot changes in phosphorylation for AKT1S1
 
-Below, we plot the changes in phosphorylation for AKT1S1, which has multiple significantly changing sites
+Below, we plot the changes in phosphorylation for AKT1S1, which has multiple significantly changing sites and is itself a well-characterised direct mTORC1 substrate. Values are expressed relative to the mean DMSO abundance for each site (`abundance_diff`), restricted to sites significant at 10% FDR.
 
 ```{r}
 
@@ -318,7 +359,7 @@ to_plot$ptm_name_facet <- factor(to_plot$ptm_name_facet,
                                  levels=unique(to_plot$ptm_name_facet))
 
 p_values <- phospho_limma_results %>%
-  filter(Gene.Names.First=='AKT1S1') 
+  filter(Gene.Names.First=='AKT1S1')
 
 sig_sites <- p_values %>%
   filter(adj.P.Val<0.1) %>%
@@ -358,59 +399,11 @@ ggsave(plot=p2, here('results/plots/PROTAC_AKT1S1_phosphosite_changes.pdf'))
 
 ```
 
-```{r, fig.width=10, fig.height=5}
-phoi <- c('P51397_S2;S3', 'P51397_S49;S51', 'Q96B36_S183', 'Q96B36_T233', 'Q96B36_S247')
+## Selected validated phosphosites: AKT1S1 and DAP1
 
-to_plot <- long_long_format_phosphopeptide_norm_to_protein %>%
-  filter(phosphopeptide %in% phoi, type=='phosphopeptide_prot_norm')
-
-DMSO_abundances <- to_plot %>%
-  filter(condition=='DMSO') %>%
-  group_by(prot_phos) %>%
-  summarise(abundance=mean(abundance))
-
-to_plot <- to_plot %>%
-  merge(uniprot2details_unique[c('UniprotID', 'Entry.Name')], by.x='UniprotID', by.y='UniprotID') %>%
-  merge(DMSO_abundances, by='prot_phos', suffix=c('', '_DMSO')) %>%
-  mutate(abundance_diff=abundance - abundance_DMSO) %>%
-  group_by(condition, prot_phos) %>%
-  mutate(mean_abundance_diff=mean(abundance_diff)) %>%
-  arrange(desc(mean_abundance_diff)) %>%
-  mutate(ptm_name_facet=sprintf('%s\n%s', sub('_HUMAN', '', Entry.Name), sub('; ', ';', ptm_name)))
-
-to_plot$ptm_name_facet <- factor(to_plot$ptm_name_facet,
-                                 levels=unique(to_plot$ptm_name_facet))
+The next three chunks focus on a small set of phosphosites with prior *in vitro* validation as direct mTORC1 substrates: two DAP1 sites (`P51397_S2;S3`, `P51397_S49;S51`) and AKT1S1 S183 (`Q96B36_S183`), alongside nearby sites on the same proteins for comparison. The first chunk below compares the validated sites (S183, T233, S247 on AKT1S1, and both DAP1 sites) against other sites on the same two proteins, as log2 fold changes. The following two chunks re-plot a restricted set of the same sites (dropping T233/S247) on an untransformed, DMSO-relative abundance scale — first as fold-change-from-DMSO, then as raw protein-normalised abundance per sample — as alternative visualisations of the same underlying values. All three chunks save to the same `PROTAC_AKT1S1_DAP1_phosphosite_changes_selected` filename, so the file on disk reflects whichever of these was rendered most recently (the untransformed relative-abundance version, from the second of the three chunks).
 
 
-val_sites <- phoi[1:3]
-
-p <- to_plot %>%
-  mutate(val=ifelse(phosphopeptide %in% val_sites, '\nin vitro validated\n', 'Other site on\nvalidated protein')) %>%
-  filter(condition!='DMSO') %>%
-  ggplot(aes(ptm_name_facet, abundance_diff, fill=val)) +
-  geom_point(colour=get_cat_palette(2)[2], stroke=0.5, shape=21, size=5) +
-  scale_fill_manual(values=c(get_cat_palette(2)[2], 'grey95'), name='') +
-  stat_summary(fun.min=mean, fun.max=mean, geom='errorbar',
-               linewidth=1, width=0.2, colour='grey20') +
-  theme_biomasslmb(aspect_square = FALSE, base_size = 20) +
-  labs(x='', y=expression(Log[2]*FC~"(PROTAC/DMSO)"))  +
-  facet_grid(.~val, scales='free_x', space='free_x') +
-  theme(strip.background = element_blank(),
-        strip.text = element_blank(),
-        panel.spacing = unit(10, 'mm'),
-        strip.text.x=element_text(vjust=1, hjust=0),
-        plot.title = element_text(hjust=0.5)) +
-  theme(strip.text.x=element_blank()) +
-  ylim(0, NA)
-
-print(p)
-
-ggsave(plot=p, here('results/plots/PROTAC_AKT1S1_DAP1_phosphosite_changes_selected.png'))
-ggsave(plot=p, here('results/plots/PROTAC_AKT1S1_DAP1_phosphosite_changes_selected.pdf'))
-
-
-
-```
 ```{r, fig.width=7, fig.height=5}
 phoi <- c('P51397_S2;S3', 'P51397_S49;S51', 'Q96B36_S183')
 
@@ -461,210 +454,14 @@ ggsave(plot=p, here('results/plots/PROTAC_AKT1S1_DAP1_phosphosite_changes_select
 
 ```
 
-```{r, fig.width=7, fig.height=5}
-p <- to_plot %>%
-  ggplot(aes(ptm_name_facet, abundance, colour=condition, group=interaction(condition, ptm_name_facet))) +
-  geom_point(stroke=0.5, shape=16, size=5, position=position_dodge(width=0.5)) +
-  scale_colour_manual(values=get_cat_palette(2), name='') +
-  stat_summary(fun.min=mean, fun.max=mean, geom='errorbar',
-               linewidth=1, width=0.2, colour='grey20') +
-  theme_biomasslmb(aspect_square = FALSE, base_size = 20) +
-  labs(x='', y="Phosphopeptide abundance\n(normalised to protein)")  +
-  theme(strip.background = element_blank(),
-        strip.text = element_blank(),
-        panel.spacing = unit(10, 'mm'),
-        strip.text.x=element_text(vjust=1, hjust=0),
-        plot.title = element_text(hjust=0.5)) +
-  theme(strip.text.x=element_blank()) #+ scale_y_continuous(limits=c(1, NA),breaks=seq(1,2.25,0.25))
+# mTORC1 substrate enrichment: manuscript figure
 
-print(p)
-
-
-long_long_format_phosphopeptide_norm_to_protein %>%
-  ggplot(aes(abundance, colour=type)) +
-  geom_density() +
-  theme_biomasslmb()
-```
-
-```{r, fig.width=8}
-
-
-obj <- qfs$total
-poi <- 'Q96B36'
-experiments_to_plot =  c('psm_raw', 'psm_filtered_forSum')
-protein_id_col = "Leading.razor.protein"
-label_col = "Gene.Names.First"
-log2transform_cols = c('psm_raw', 'psm_filtered_forSum')
-alpha_assays = FALSE
-row_vars <- 'Sequence'
-
-
-rowData(qfs$total[['psm_raw']]) %>%
-  data.frame() %>% 
-  filter(Leading.razor.protein %in% poi)
-to_plot_pep <- obj[, , experiments_to_plot] %>% biomasslmb:::qfeatures_long(rowvars = c(protein_id_col, 
-    label_col, row_vars)) %>% data.frame()
-
-to_plot_prot <- obj[, , 'protein'] %>% biomasslmb:::qfeatures_long(rowvars = c(protein_id_col, 
-    label_col)) %>% data.frame()
-
-
-to_plot <- bind_rows(to_plot_prot, to_plot_pep) %>%
-  filter(!!sym(protein_id_col) %in%  poi) %>%
-  mutate(label = !!sym(label_col)) %>%
-  mutate(value = ifelse(assay %in% log2transform_cols, log2(value), value)) %>%
-  mutate(assay_order = factor(assay, levels = c(experiments_to_plot, 'protein')))
-
-to_plot <- to_plot %>%
-  merge(colData(obj), by.x='colname', by.y='row.names')
-
-ylab <- "Abundance (log2)"
-    
-p <- to_plot %>% 
-    ggplot(aes(x = paste(condition, replicate), y = value)) + geom_point() + 
-    geom_line(aes(group = rowname)) + facet_grid(assay_order ~ 
-    label, scales = "free_y") + theme_biomasslmb(border = FALSE, 
-    base_size = 12) + theme(axis.text.x = element_text(angle = 45, 
-    vjust = 1, hjust = 1, size = 8), strip.text.y = element_text(size = 10, 
-    angle = 0), strip.background = element_blank(), panel.spacing.x = unit(10, 
-    "mm")) + labs(x = "", y = ylab) +
-  aes(colour=Sequence) +
-  scale_colour_manual(values=get_cat_palette(7))
-
-p
-```
-
-
-```{r, fig.width=6, fig.height=6}
-
-mtor_substrates <- read.csv(here('raw/PROTAC/mTORC1_substrates_table1_expanded.csv'))
-
-
-mtor_substrates
-
-# highlight 
-highlight <- phospho_limma_results %>%
-  merge(mtor_substrates,
-        by.x=c('UniprotID', 'phospho_pos'),
-        by.y=c('Uniprot.ID', 'Phosphorylated.site.s.'))
-
-
-print(nrow(highlight))
-
-phospho_limma_results %>%
-  mutate(significant=adj.P.Val<0.1) %>%
-  ggplot(aes(logFC, -log10(P.Value))) +
-  geom_point(aes(fill=significant,
-             alpha=significant, size=significant),
-             colour='grey20', stroke=0.25, shape=21) +
-  geom_point(data=highlight, colour=get_cat_palette(2)[2]) +
-  theme_biomasslmb() +
-  scale_fill_manual(values=c('grey60', get_cat_palette(1)),
-                      name='Significant\n(FDR<10%)') +
-  scale_size_manual(values=c(0.5, 1), guide='none') +
-  scale_alpha_manual(values=c(0.1, 0.5), guide='none') +
-  labs(x='log2 FC (PROTAC vs DMSO)', y='-log10(p-value)') +
-  theme(strip.background = element_blank()) +
-  geom_text_repel(
-    data=highlight,
-    aes(label=paste(Gene.Names.First, gsub('.*_', '', phosphosite))),
-    max.overlaps = 50, size=3, min.segment.length =0, colour='black', force = 10) +
-  ggtitle('Phosphorylation') -> p
-
-print(p)
-
-
-mtor_substrates
-
-
-print(p)
-
-
-# highlight 
-highlight2 <- phospho_limma_results %>%
-  filter(UniprotID %in% unique(mtor_substrates$Uniprot.ID))
-
-
-mtor_substrates %>%
-  filter(Uniprot.ID %in% pull(filter(highlight2, adj.P.Val<0.1), UniprotID)) %>%
-  select(Substrate, Uniprot.ID, Phosphorylated.site.s., Function, Remarks) %>%
-  merge(distinct(select(highlight, Gene.Names.First, Gene.Names, UniprotID, Protein.names.y)),
-        by.x='Uniprot.ID', by.y='UniprotID')
-
-phospho_limma_results %>%
-  mutate(significant=adj.P.Val<0.1) %>%
-  ggplot(aes(logFC, -log10(P.Value))) +
-  geom_point(aes(fill=significant,
-             alpha=significant, size=significant),
-             colour='grey20', stroke=0.25, shape=21) +
-  geom_point(data=highlight2, colour=get_cat_palette(2)[2]) +
-  theme_biomasslmb() +
-  scale_fill_manual(values=c('grey60', get_cat_palette(1)),
-                      name='Significant\n(FDR<10%)') +
-  scale_size_manual(values=c(0.5, 1), guide='none') +
-  scale_alpha_manual(values=c(0.1, 0.25), guide='none') +
-  labs(x='log2 FC (PROTAC vs DMSO)', y='-log10(p-value)') +
-  theme(strip.background = element_blank()) +
-  geom_text_repel(
-    data=filter(highlight2, adj.P.Val<0.1),
-    aes(label=paste(Gene.Names.First, gsub('.*_', '', phosphosite))),
-    max.overlaps = 50, size=4, min.segment.length =0, colour='black', force = 10) +
-  ggtitle('Phosphorylation') -> p
-
-print(p)
-
-crosstab_poi_sig <- phospho_limma_results %>%
-  group_by(is_poi=ifelse(phosphosite %in% highlight2$phosphosite, 'mTORC1 substrate', 'Other'),
-           significant=adj.P.Val<0.1) %>%
-  tally() %>%
-  pivot_wider(names_from = significant, values_from=n, values_fill=0) %>%
-  tibble::column_to_rownames('is_poi')
-
-crosstab_poi_sig %>%
-  mutate(frac_sig=`TRUE`/(`TRUE`+`FALSE`))
-
-print(crosstab_poi_sig)
-fisher.test(crosstab_poi_sig)  
-```
-```{r}
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
-  dplyr::count(is_poi)
-
-
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(phosphosite %in% unique(highlight$phosphosite), 'mTORC1 substrate', 'Other')) %>%
-  ggplot(aes(abs(logFC), colour=is_poi)) +
-  geom_density() +
-  theme_biomasslmb() +
-  labs(x='log2 FC (PROTAC vs DMSO)', y='Density', colour='') +
-  scale_colour_manual(values=c(get_cat_palette(2)[2], 'grey60'))
-
-
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
-  ggplot(aes(abs(logFC), colour=is_poi)) +
-  geom_density() +
-  theme_biomasslmb() +
-  labs(x='log2 FC (PROTAC vs DMSO)', y='Density', colour='') +
-  scale_colour_manual(values=c(get_cat_palette(2)[2], 'grey60'))
-
-
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(phosphosite %in% unique(highlight$phosphosite), 'mTORC1 substrate', 'Other')) %>%
-  ks.test(abs(logFC) ~ is_poi, data=.)
-
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
-  ks.test(abs(logFC) ~ is_poi, data=.)
-
-
-```
-
+This section repeats the substrate-enrichment analysis using the updated substrate reference table (`mTORC1_substrates_Battaglioni2022_plus_2026update.xlsx`), and distinguishes three categories of phosphosite for the final manuscript figure: sites with direct *in vitro* validation as mTORC1 substrates (`highlight_val`, matched against the updated table, plus the two DAP1 sites already highlighted above), other sites on the same validated proteins from the original substrate table (`highlight_all_sites_in_protein`), and everything else. DAP1 (P51397, gene name `DAP`) and the AKT1S1 (Q96B36) sites are labelled explicitly on the resulting plot, which is saved as the manuscript volcano figure. `set.seed(0)` is included for reproducibility, although no random sampling is performed in this chunk.
 
 ```{r, fig.width=10, fig.height=6}
 set.seed(0)
 
+mtor_substrates <- read.csv(here('raw/PROTAC/mTORC1_substrates_table1_expanded.csv'))
 
 mtor_substrates_updated <- openxlsx::read.xlsx(here('raw/PROTAC/mTORC1_substrates_Battaglioni2022_plus_2026update.xlsx')) %>%
   data.frame()
@@ -680,7 +477,7 @@ phospho_limma_results %>%
         by.y=c('Uniprot.ID', 'Phosphorylated.site.s.')) %>%
   select(Gene.Names.First, Entry.Name)
 
-# highlight 
+# highlight
 highlight_val <- phospho_limma_results %>%
   merge(mtor_substrates_updated,
         by.x=c('UniprotID', 'phospho_pos'),
@@ -707,14 +504,14 @@ highlight <- bind_rows(highlight_val, highlight_all_sites_in_protein) %>%
 
 
 highlight %>%
-  filter(Gene.Names.First=='AKT1S1') 
+  filter(Gene.Names.First=='AKT1S1')
 phospho_limma_results %>%
   filter(adj.P.Val<0.1) %>%
   ggplot(aes(logFC, -log10(P.Value))) +
   geom_point(colour='grey60', alpha=1, size=1, shape=20) +
   geom_point(data = filter(phospho_limma_results, adj.P.Val>0.1),
              colour='grey80', alpha=0.25, size=0.5, shape=20) +
-  
+
   geom_point(data=filter(highlight, type=='in vitro validated'), colour=get_cat_palette(2)[2],
              aes(alpha=significant), pch=16, size=4) +
   geom_point(data=filter(highlight, type=='other site on validated protein'),
@@ -751,7 +548,7 @@ crosstab_poi_sig %>%
   mutate(frac_sig=`TRUE`/(`TRUE`+`FALSE`))
 
 print(crosstab_poi_sig)
-fisher.test(crosstab_poi_sig)  
+fisher.test(crosstab_poi_sig)
 
 crosstab_poi_sig <- phospho_limma_results %>%
   group_by(is_poi=ifelse(phosphosite %in% highlight$phosphosite, 'mTORC1 substrate', 'Other'),
@@ -764,52 +561,9 @@ crosstab_poi_sig %>%
   mutate(frac_sig=`TRUE`/(`TRUE`+`FALSE`))
 
 print(crosstab_poi_sig)
-fisher.test(crosstab_poi_sig)  
+fisher.test(crosstab_poi_sig)
 ```
 
-```{r}
-rowData(qfs$phospho[['psm_annot']]) %>%
-  data.frame() %>%
-  filter(Gene.Names.First=='DAP') %>%
-  select(Entry.Name, ptm_name, Phospho..STY..Probabilities) %>%
-  knitr::kable()
-```
-
-
-```{r}
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates_updated$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
-  count(is_poi)
-
-
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(phosphosite %in% unique(highlight$phosphosite), 'mTORC1 substrate', 'Other')) %>%
-  ggplot(aes(logFC, colour=is_poi)) +
-  geom_density() +
-  theme_biomasslmb() +
-  labs(x='log2 FC (PROTAC vs DMSO)', y='Density', colour='') +
-  scale_colour_manual(values=c(get_cat_palette(2)[2], 'grey60'))
-
-
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates_updated$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
-  ggplot(aes(logFC, colour=is_poi)) +
-  geom_density() +
-  theme_biomasslmb() +
-  labs(x='log2 FC (PROTAC vs DMSO)', y='Density', colour='') +
-  scale_colour_manual(values=c(get_cat_palette(2)[2], 'grey60'))
-
-
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(phosphosite %in% unique(highlight$phosphosite), 'mTORC1 substrate', 'Other')) %>%
-  ks.test(abs(logFC) ~ is_poi, data=.)
-
-phospho_limma_results %>%
-  mutate(is_poi = ifelse(UniprotID %in% unique(mtor_substrates_updated$Uniprot.ID), 'mTORC1 substrate', 'Other')) %>%
-  ks.test(abs(logFC) ~ is_poi, data=.)
-
-
-```
 
 # Save results
 

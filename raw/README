@@ -1,1 +1,7 @@
-Directory for storing 'raw' files for analysis. These are typically output files from PD/Spectronaut etc.
+Directory for storing 'raw' files for analysis.
+
+- HALO: MaxQuant (label-free, DDA) PSM/peptide/protein-level output and search
+  parameters for the PER2-HALO vs HALO immunoprecipitation experiment.
+- PROTAC: MaxQuant (TMT18-plex, DDA) PSM-level output for the PER2-PROTAC vs
+  DMSO experiment, plus the experiment design and mTORC1 substrate reference
+  tables used for annotation.

@@ -2,10 +2,40 @@
 title: "PER2-HALO: Data exploration and statistical testing"
 author: "Tom Smith"
 date: "`r Sys.Date()`"
-output: pdf_document
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
 ---
 
-Here, we explore the protein-level quantitative data and perform statistical testing.
+# Purpose
+
+This notebook takes the filtered, normalised peptide-level data produced in notebook 1 and answers the biological question motivating the PER2-HALO experiment: does PER2 interact with mTORC1? It summarises peptide abundances to protein level using `limpa`'s Detection Probability Curve (DPC) model, tests for differential abundance between the PER2-HALO pulldown and the free HALO tag control using `limma`, and produces the manuscript volcano and summary plots highlighting circadian clock proteins and mTOR pathway components.
+
+Because this is an immunoprecipitation (IP) experiment, the quantity of interest is *enrichment* in the PER2-HALO pulldown relative to the HALO-only control: proteins depleted in PER2-HALO relative to HALO are not biologically meaningful as PER2 interactors, so throughout the plots below "significant" is defined as 5% FDR *and* a positive fold change (higher abundance in PER2-HALO).
+
+**Input:**
+
+- `notebooks/output/HALO_lfq_qf.rds` from notebook 1 — the `QFeatures` object with the histone-normalised peptide-level data.
+- `external/uniprot2details_unique.rds` from notebook 0 — UniProt protein annotations.
+- `raw/HALO/PER2 IP - List for volcano plot.xlsx` — a manually curated list of mTOR pathway proteins to highlight, giving gene names and/or UniProt accessions.
+
+**Output:**
+
+- `results/HALO_wide_format_protein.tsv` and `results/HALO_long_format_protein.tsv` — the `limpa`-derived protein abundances, in wide and long format respectively.
+- `results/HALO_limpa_results.tsv` — the differential abundance statistics (PER2-HALO vs HALO) for every protein.
+- `results/plots/limpa_volcano_per2h_vs_halo.{png,pdf}` — the manuscript volcano plot.
+- `results/plots/limpa_clock_mtor_per2h_vs_halo.{png,pdf}` — the manuscript summary plot of fold changes for clock and mTOR pathway proteins.
+
+**Analysis:**
+
+1. **Protein-level summarisation** — fit the DPC model and quantify protein abundances with `limpa::dpcQuant`, restricted to proteins with at least 2 peptides; fold the result back into the `QFeatures` object alongside its standard errors.
+2. **Data exploration** — a sample correlation heatmap and PCA to confirm the two conditions separate as expected before proceeding to statistical testing.
+3. **Statistical testing** — fit `~condition` with `limpa::dpcDE` and `limma::eBayes`, and extract the PER2-HALO vs HALO contrast for every protein.
+4. **Visualisation** — a volcano plot highlighting circadian clock proteins and mTOR pathway proteins, a per-protein fold-change summary plot for the same highlighted proteins, and a per-sample abundance plot showing which values were quantified from real peptide measurements versus inferred by the DPC model in the absence of any peptide quantification.
+
+**How to read the results:** positive `logFC` values indicate higher abundance in PER2-HALO relative to HALO (enrichment in the pulldown); significance is assessed at 5% FDR (`adj.P.Val < 0.05`). Where a protein has no peptide quantification in any HALO control replicate (e.g. CRY1/CRY2), its abundance and fold change are inferred entirely by the DPC model rather than measured, so these fold changes should be treated as directionally suggestive rather than precisely quantified; the per-sample abundance plot marks such values explicitly so they can be distinguished from directly quantified ones.
 
 # Setup
 
@@ -40,7 +70,7 @@ lfq_qf <- readRDS(here('notebooks/output/HALO_lfq_qf.rds'))
 uniprot2details_unique <- readRDS(here('external/uniprot2details_unique.rds'))
 ```
 
-Define proteins to highlight
+Define proteins to highlight in the figures below: `mtor_proteins_to_highlight` is read from a manually curated spreadsheet of mTOR pathway components (matched later by gene name or UniProt accession, since the spreadsheet provides both), and `clock_proteins` is a fixed list of core circadian clock genes.
 
 ```{r, message=FALSE, warning=FALSE}
 mtor_proteins_to_highlight <- readxl::read_excel(
@@ -54,7 +84,7 @@ clock_proteins <- c('PER2', 'PER1', 'CRY1', 'CRY2', 'CSNK1D',
 
 # Summarising to protein-level using `limpa`
 
-The first step is to perform protein quantification using `limpa`. We start by creating an `EList` object from the peptide level data, then fitting the Detection Probability Curve (DPC) model and performing protein quantification. The DPC is used to model the relationship between peptide detectability and abundance, allowing for more accurate protein quantification in the presence of missing values.
+The first step is to perform protein quantification using `limpa`. We start by creating an `EList` object from the peptide level data, then fitting the Detection Probability Curve (DPC) model and performing protein quantification. The DPC is used to model the relationship between peptide detectability and abundance, allowing for more accurate protein quantification in the presence of missing values. We first restrict to proteins with at least 2 quantified peptides, since a protein's abundance and detectability cannot be reliably estimated from a single peptide.
 
 ```{r, out.width='50%'}
 
@@ -73,13 +103,13 @@ y.protein <- dpcQuant(y.peptide, protein.id="Leading.razor.protein", dpc=dpcfit)
 
 ```
 
-Next, we want to add the protein-level quantification results from `limpa` back into our `QFeatures` object for further analysis. For this, we need to create a 1) `summarizedExperiment` object, 2) Add it to our `QFeatures` object and 3) add assay links to the ppeptide-level data.
+Next, we want to add the protein-level quantification results from `limpa` back into our `QFeatures` object for further analysis. For this, we need to create a 1) `summarizedExperiment` object, 2) Add it to our `QFeatures` object and 3) add assay links to the peptide-level data.
 
 ```{r, warning=FALSE, message=FALSE}
 # Create a temporary protein-level summarizedExperiment so we can extract the
 # rowData for our limpa summarizedExperiment
-lfq_qf <- aggregateFeatures(lfq_qf, 
-                            i = "peptides_norm_hist", 
+lfq_qf <- aggregateFeatures(lfq_qf,
+                            i = "peptides_norm_hist",
                             fcol = "Leading.razor.protein",
                             name = "protein_sum",
                             fun = colSums, na.rm=TRUE)
@@ -93,20 +123,20 @@ limpa_protein <- SummarizedExperiment(
   colData = colData(lfq_qf))
 
 # Add the limpa protein-level assay to the QFeatures object
-lfq_qf <- addAssay(x = lfq_qf, 
-                   y = limpa_protein, 
+lfq_qf <- addAssay(x = lfq_qf,
+                   y = limpa_protein,
                    name = "protein_limpa")
 
 # Add assay link from peptide-level data to protein-level data
-lfq_qf <- addAssayLink(object = lfq_qf, 
-                      from = "peptides_norm_hist", 
+lfq_qf <- addAssayLink(object = lfq_qf,
+                      from = "peptides_norm_hist",
                       to = "protein_limpa",
                       varFrom='Leading.razor.protein',
                       varTo='Leading.razor.protein')
 
 ```
 
-Below, we extract the standard errors from the `limpa` results for later use in plotting.
+Below, we extract the standard errors from the `limpa` results for later use in plotting, and build a long-format table of protein abundances flagging which values were directly quantified from peptides versus inferred by the DPC model without any peptide quantification in that sample (`is.imputed`).
 
 ```{r}
 # Extract standard errors and expression values in long format
@@ -135,7 +165,7 @@ long_protein <- biomasslmb::create_long_form_imputed_data(
 long_protein_inc_std_error <- merge(
   long_protein,
   stderrors_long, by.x=c('primary', 'rowname'),
-  by.y=c('sample', 'UniprotID')) 
+  by.y=c('sample', 'UniprotID'))
 
 # Save long format protein quantification with standard errors
 long_protein_inc_std_error %>%
@@ -154,7 +184,7 @@ Save the protein quantification in wide format
 
 ```{r}
 
-protein_wide_format <- assay(lfq_qf[['protein_limpa']]) 
+protein_wide_format <- assay(lfq_qf[['protein_limpa']])
 
 protein_wide_format <- protein_wide_format %>%
   data.frame() %>%
@@ -198,7 +228,7 @@ Below, we use PCA to examine the major sources of variance.
 ```{r, fig.show='hold', out.width="50%"}
 
 plot_pca(lfq_qf, 'protein_limpa',
-         scale=TRUE, center=TRUE) + 
+         scale=TRUE, center=TRUE) +
   aes(fill=condition) +
   #scale_shape_manual(name='', values=c(21,22)) +
   theme_biomasslmb(base_size=10)
@@ -206,13 +236,13 @@ plot_pca(lfq_qf, 'protein_limpa',
 
 
 ```
-PCA gives the same overall view of the samples, with the separation between conditions accounting for ~70% of the variance
+PCA gives the same overall view of the samples, with the separation between conditions accounting for ~70% of the variance.
 
 
 
 # Statistical testing
 
-Having established that the experimental conditions appear to have had the expected effect, we proceed to statistical testing for PER2-HALO (P2H) vs HALO (HA). We use the `limma` package for this, applying the empirical Bayes moderation to the standard errors to improve statistical power.
+Having established that the experimental conditions appear to have had the expected effect, we proceed to statistical testing for PER2-HALO (P2H) vs HALO (HA). We fit the model with `limpa::dpcDE`, which extends the DPC-based quantification to differential expression testing, and update it with `limma::eBayes` moderation, which shares information about the abundance-variance trend across all proteins to give more stable variance estimates for individual proteins (particularly useful here, where per-protein replicate numbers are small). `plotSA` is the standard QC plot for checking this mean-variance trend has been captured appropriately.
 
 ```{r, out.width='50%'}
 
@@ -225,7 +255,7 @@ fit <- dpcDE(y.protein, design)
 
 
 ## Update the model using the limma eBayes algorithm
-final_model <- eBayes(fit = fit, 
+final_model <- eBayes(fit = fit,
                     trend = TRUE,
                     robust = TRUE)
 
@@ -233,7 +263,7 @@ plotSA(final_model)
 
 ## Format results
 limpa_results <- topTable(
-  fit = final_model,   
+  fit = final_model,
   coef = 2, confint = TRUE,
   adjust.method = "BH",    # Method for multiple hypothesis testing
   number = Inf)
@@ -241,12 +271,12 @@ limpa_results <- topTable(
 # Check distribution of p-values
 limpa_results %>%
   as_tibble() %>%
-  ggplot(aes(x = P.Value)) + 
+  ggplot(aes(x = P.Value)) +
   geom_histogram() +
   theme_biomasslmb()
 ```
 
-
+The p-value histogram is a standard diagnostic: under the null hypothesis of no difference between conditions, p-values should be uniformly distributed, with an excess near zero reflecting genuinely differentially abundant proteins.
 
 How many significantly changing proteins at 5% FDR?
 
@@ -259,13 +289,15 @@ table(ifelse(limpa_results$logFC>0, 'Inc.', 'Dec.'),
 
 ## Volcano plot highlighting clock proteins and mTOR pathway proteins
 
+Below, we build the volcano plot that is the primary output of this notebook. Two sets of proteins are separately identified for highlighting and labelling: circadian clock proteins (`highlight_clock`, matched by gene name against the fixed `clock_proteins` list) and mTOR pathway proteins (`highlight_mtor`, matched by gene name or UniProt accession against the curated spreadsheet, since not every protein in that list has an unambiguous gene name match). As noted above, "significant" here requires both 5% FDR and enrichment in PER2-HALO (`logFC > 0`), since depletion is not biologically informative for an interactor screen.
+
 ```{r, warning=FALSE, message=FALSE}
 
 
 highlight_clock <- limpa_results %>%
   filter(Gene.Names.First %in% clock_proteins) %>%
   mutate(significant=adj.P.Val<0.05 & logFC>0)
-  
+
 highlight_mtor <- limpa_results %>%
   tibble::rownames_to_column('Leading.razor.protein') %>%
     filter(Gene.Names.First %in% union(mtor_proteins_to_highlight$`...1`,
@@ -312,19 +344,21 @@ limpa_results %>%
 
 ## Protein abundances for clock proteins and mTOR pathway proteins
 
+Having highlighted the proteins of interest on the volcano plot, we now summarise their fold changes in a dedicated plot, grouped into clock proteins, mTOR complex members (MTOR, MLST8, RICTOR), and the remaining mTOR pathway regulators. Proteins are ordered along the x-axis by their appearance in `to_plot` (itself ordered by significance, most PER2-HALO-enriched first), with PER2 always shown first.
 
 ```{r, warning=FALSE, message=FALSE}
 to_plot <- limpa_results %>%
+  tibble::rownames_to_column('Leading.razor.protein') %>%
   arrange(-sign(logFC)*-log10(P.Value)) %>%
   mutate(rank=1:n()) %>%
   filter((Gene.Names.First %in% clock_proteins)|
            Gene.Names.First %in% union(mtor_proteins_to_highlight$`...1`,
                                               mtor_proteins_to_highlight$`...2`)|
                     (Leading.razor.protein %in% mtor_proteins_to_highlight$`...3`))
-           
+
 protein_order <- c('PER2', setdiff(sort(clock_proteins), 'PER2'))
 protein_order <- c('PER2', setdiff(to_plot$Gene.Names.First,'PER2'))
-                   
+
 p <- to_plot %>%
   mutate(Gene.Names.First=factor(Gene.Names.First,levels=protein_order)) %>%
   mutate(type=case_when(
@@ -342,7 +376,7 @@ p <- to_plot %>%
   labs(x='',
        y=expression(Log[2]*FC~"(PER2-HALO/HALO)")) +
   theme(axis.text.x = element_text(angle=45, vjust=1, hjust=1)) +
-  
+
   scale_colour_manual(values=c('grey80', get_cat_palette(5)[5]),
                       name='Significant\n(FDR<5%)') +
   facet_grid(.~type, scales='free_x', space='free_x') +
@@ -357,7 +391,7 @@ ggsave(here(plots_dir, 'limpa_clock_mtor_per2h_vs_halo.png'))
 ggsave(here(plots_dir, 'limpa_clock_mtor_per2h_vs_halo.pdf'))
 ```
 
-Below, we inspect the abundance values for individual samples for these proteins. For some like CRY1/CRY2, we haven't quantified any peptides in any HALO controls samples, so the protein abundance is inferred from the `limpa`` model in the absence of quantification. The fold-changes in these cases are obviously less reliable, but given all the PER2-HALO samples are well quantified, it does suggest a strong enrichment. Aside from MIOS, all the mTOR pathway proteins highlighted are quantified in some peptides for at least 2/3 HALO ciontrol replicates, which gives us reasonable confidence in the fold-changes observed.
+Below, we inspect the abundance values for individual samples for these proteins. For some like CRY1/CRY2, we haven't quantified any peptides in any HALO controls samples, so the protein abundance is inferred from the `limpa` model in the absence of quantification. The fold-changes in these cases are obviously less reliable, but given all the PER2-HALO samples are well quantified, it does suggest a strong enrichment. Aside from MIOS, all the mTOR pathway proteins highlighted are quantified in some peptides for at least 2/3 HALO control replicates, which gives us reasonable confidence in the fold-changes observed.
 
 ```{r, fig.width=12, fig.height=6}
 
@@ -385,6 +419,8 @@ long_protein_inc_std_error %>%
   guides(fill=guide_legend(override.aes = list(size=4, pch=21)))
 ```
 
+
+# Session info
 
 ```{r}
 sessionInfo()

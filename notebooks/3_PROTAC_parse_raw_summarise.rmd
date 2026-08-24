@@ -2,11 +2,47 @@
 title: "PER2-PROTAC: QC PSM-level quantification and summarisation to protein-level abundance"
 author: "Tom Smith"
 date: "`r Sys.Date()`"
-output: pdf_document
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
 ---
 
-Here, we will read in the PSM-level quantification data, perform routine PSM filtering and then summarise the quantification to protein-level abundances.
+# Purpose
 
+This notebook reads the PSM-level output from the MaxQuant search of the PER2-PROTAC experiment (a single TMT18-plex, DDA acquisition, run as separate total-proteome and phospho-enriched fractionated experiments sharing the same 18 reporter channels), applies routine PSM quality filtering, and summarises the quantification to protein-level and phosphosite-level abundances. The result is normalised protein and phosphopeptide abundance matrices ready for statistical testing in notebook 4.
+
+The TMT18 plex multiplexes samples from more than one experiment: alongside the PER2-PROTAC (`P2H`) samples relevant to this project, it also carries `P1H` and combined `P1H/P2H` channels belonging to a different, unrelated experiment. This notebook reads in all 18 channels but subsets to just the 6 `P2H` channels (DMSO x3, PROTAC x3) immediately after loading.
+
+The total and phospho data are processed through the same sequence of steps, so throughout the notebook the two experiments are held together in a list of two `QFeatures` objects (`qfs$total` and `qfs$phospho`) and looped over. Where the phospho experiment needs additional handling (PTM localisation, PSM-to-phosphosite summarisation) this is called out explicitly.
+
+**Input:**
+
+- `raw/PROTAC/evidence.txt.gz` — MaxQuant PSM-level output, covering both the total-proteome and phospho-enriched (fractionated) runs, distinguished by whether the `Raw.file` name contains `phos`.
+- `raw/PROTAC/proteinGroups.txt.gz` — protein-level search results, used here for the `Q.value` (FDR) column.
+- `raw/PROTAC/exp_design.xlsx` — the TMT channel / genotype / condition / replicate layout.
+- `external/uniprot2details_unique.rds` from notebook 0 — UniProt protein annotations.
+
+**Output:**
+
+- `notebooks/output/PROTAC_qfs.rds` — the list of two `QFeatures` objects (total and phospho) retaining every processing stage, consumed by notebook 4.
+- `results/PROTAC_wide_format_protein.tsv` — bridge-free, normalised protein abundances in wide (feature x sample) format.
+- `results/PROTAC_long_format_protein.tsv` and `results/PROTAC_long_format_phospho.tsv` (with matching `.rds` files in `notebooks/output/`) — the protein and phosphopeptide abundances in tidy long format.
+- `results/PROTAC_long_format_phosphopeptide_norm_to_protein.tsv` (and matching `.rds`) — phosphopeptide abundances joined to their parent protein abundance, with a phospho-normalised-to-protein column.
+- `notebooks/output/PROTAC_long_long_format_phosphopeptide_norm_to_protein.rds` — the same data with protein / phosphopeptide / normalised-phosphopeptide values held as separate rows rather than columns, used for some of the exploratory plots in notebook 4.
+
+**Analysis:**
+
+1. **Read data** — read the PSM-level evidence file, join in protein annotations and the protein-level FDR (`Q.value`), split into total-proteome and phospho-enriched PSMs by raw file name, build one `QFeatures` object per experiment, and subset both to the PER2-PROTAC (`P2H`) channels.
+2. **Generic filtering** — remove contaminant PSMs and PSMs lacking a unique master protein; for the total-proteome data, additionally remove PSMs belonging to proteins that fail the 1% FDR threshold.
+3. **Phospho-specific filtering** — determine phosphosite localisation from the MaxQuant PTM probabilities, retain only confidently localised phosphosites, and record the phosphosite position(s) and surrounding sequence on the protein.
+4. **Co-isolation filtering** — remove PSMs where more than 50% of the isolated MS1 signal came from co-isolated (non-target) species, which would otherwise compress the TMT reporter ratios.
+5. **Normalisation** — median-normalise the PSM abundances (both experiments independently, since there is a single plex here and so no inter-plex batch effect to correct for).
+6. **Summarisation** — after removing PSMs with more than one missing value and imputing the small remainder, sum PSM intensities to protein level (total) or phosphosite level (phospho) and log2-transform.
+7. **Export** — save the `QFeatures` object and the wide/long abundance tables, including phosphopeptide abundances normalised to their parent protein.
+
+**How to read the results:** the key objects for downstream notebooks are the long-format tables. `long_format_protein` / `long_format_phospho` give the normalised abundance of each protein / phosphopeptide in each sample. `long_format_phosphopeptide_norm_to_protein` additionally carries, for each phosphopeptide, the abundance of its parent protein and the difference between them (`abundance_phosphopeptide_prot_norm`), which is the quantity used in notebook 4 to detect phosphorylation changes that are not simply driven by changes in protein abundance.
 
 # Setup
 
@@ -42,7 +78,7 @@ contaminant_proteins <- get_maxquant_cont_accessions()
 
 ## Define the experiment design
 
-We can extract the details for the experiment to sample mapping from the Excel file provided.
+We can extract the details for the experiment to sample mapping from the Excel file provided. The `sample_conditions` field encodes genotype, condition, and replicate as a single space-separated string (e.g. `"P2H DMSO 1"`), which we split into separate columns below; `reporter_n` is the TMT channel used to join this table to the PSM quantification data.
 
 ```{r}
 exp_design <- openxlsx::read.xlsx(here('raw/PROTAC/exp_design.xlsx'),
@@ -52,8 +88,8 @@ exp_design <- openxlsx::read.xlsx(here('raw/PROTAC/exp_design.xlsx'),
   separate(sample_conditions, into=c('genotype', 'condition', 'replicate'),
            sep=' ', remove = FALSE) %>%
   mutate(genotype=ifelse(genotype=='P1H/P2H', 'P1H.P2H', genotype)) %>%
-  mutate(quantCols=reporter_n) 
-  
+  mutate(quantCols=reporter_n)
+
 ```
 
 # Read in input data
@@ -70,7 +106,7 @@ table(pg_df$Q.value<0.01)
 
 ## Creating the QFeatures object
 
-Now we can now create the QFeatures object. Here, we will create two PSM-level QFeatures objects, one for the total proteome and one for the phosphoproteome.
+Now we can now create the QFeatures object. Here, we will create two PSM-level QFeatures objects, one for the total proteome and one for the phosphoproteome. Both experiments were acquired with offline fractionation (multiple raw files per experiment, all using the same 18 TMT reporter channels), so all fractions for an experiment are read into a single assay.
 
 ```{r}
 psm_inf <- here('raw/PROTAC/evidence.txt.gz')
@@ -117,7 +153,7 @@ qfs <- lapply(qfs, function(x) zeroIsNA(x, names(x)))
 
 ```
 
-Subset to the PER2-PROTAC samples only
+As noted above, the TMT18 plex multiplexes samples from more than one experiment. Below, we subset both `QFeatures` objects down to just the 6 `P2H` (PER2-PROTAC) channels — 3 DMSO and 3 PROTAC replicates — that are relevant to this project.
 
 ```{r}
 
@@ -135,20 +171,20 @@ We first perform routine filtering to remove PSMs that:
 
 ```{r}
 for(qf in names(qfs)){
-  
+
   in_assay_name <- 'psm_raw'
   out_assay_name <- 'psm_filtered'
-  
+
   qfs[[qf]][[out_assay_name]] <- filter_features_mq_dda(
     qfs[[qf]][[in_assay_name]],
     contaminant_proteins=contaminant_proteins,
     filter_contaminant=TRUE,
     filter_associated_contaminant=TRUE,
     unique_master=TRUE)
-  
+
   if(qf == 'total'){
     qfs[[qf]] <- filterFeatures(qfs[[qf]], i=out_assay_name, ~ Q.value <= 0.01)
-    
+
     biomasslmb:::message_parse(rowData(qfs[[qf]][[out_assay_name]]),
                                "Leading.razor.protein",
                                "Proteins with Q-Value > 0.01 removed")
@@ -160,7 +196,7 @@ for(qf in names(qfs)){
 
 ## Phosphosite annotation
 
-Below, we annotate the phosphopeptide PSMs to determine the phosphosite positions and sequences.
+The phospho data needs additional processing to ensure each phosphosite is confidently localised, and to determine the position of the phosphosite(s) on the protein. Below, we filter to PSMs with a confidently localised phosphosite (probability > 0.5), determine the phosphosite position(s) using a temporary reference proteome FASTA built from the detected proteins, and build a `prot_phos` identifier combining the protein accession with the phosphosite name — this is the unit we later summarise to (a specific phosphosite, or combination of sites, on a specific protein). We also record the 15-amino-acid sequence surrounding each phosphosite, used later for reporting.
 
 ```{r, warning=FALSE}
 
@@ -172,7 +208,7 @@ in_assay_name <- 'psm_filtered'
 out_assay_name <- 'psm_annot'
 
 qfs$phospho[[out_assay_name]] <- biomasslmb::filter_maxquant_ptm(
-  qfs$phospho, in_assay_name) 
+  qfs$phospho, in_assay_name)
 
 # Retain phosphosites in all contexts (ptms_to_retain=c('p', '(ph)', '(ac)p'))
 qfs$phospho[[out_assay_name]] <- add_filter_ptm_pos_rowdata_mq(
@@ -193,7 +229,7 @@ qfs$phospho[[out_assay_name]] <- qfs$phospho[[out_assay_name]] %>%
   add_site_sequence(proteome_fasta  = proteome_fasta_filepath,
                     master_protein_col = 'Leading.razor.protein',
                     sequence_pad=7)
-  
+
 # Clean up the fasta file now we've finished with it
 file.remove(proteome_fasta_filepath)
 ```
@@ -232,7 +268,7 @@ for(qf in names(qfs)){
 
 ## Normalise
 
-Next, we normalise the PSM level intensities by performing diff.median normalisation within each plex.
+Next, we normalise the PSM level intensities by performing diff.median normalisation. Since all samples for a given experiment are quantified within a single TMT18 plex, there is no inter-plex batch effect to correct for here (unlike a multi-plex TMT design), so a single round of median normalisation per experiment is sufficient. We log2-transform first so the normalisation behaves as expected, then exponentiate back to the original scale, since the downstream PSM-to-feature summarisation sums non-transformed intensities.
 
 ```{r, warning=FALSE, fig.show='hold', fig.show="hold", out.width="50%"}
 
@@ -247,10 +283,10 @@ for(qf in names(qfs)){
     qfs[[qf]][[in_assay_name]], base=2)
   qfs[[qf]][[out_assay_name]] <- QFeatures::normalize(
     qfs[[qf]][[out_assay_name]], method='diff.median')
-  
+
   assay(qfs[[qf]][[out_assay_name]]) <- 2^assay(qfs[[qf]][[out_assay_name]])
-  
-  
+
+
   # Plot the peptide-level quantification distributions per sample
   p <- plot_quant(qfs[[qf]][[in_assay_name]], log2transform=TRUE, method='density') +
     theme_biomasslmb() +
@@ -259,7 +295,7 @@ for(qf in names(qfs)){
     aes(colour=condition) +
     ggtitle(paste0(qf, ' pre-norm.'))
   print(p)
-  
+
   p <- plot_quant(qfs[[qf]][[out_assay_name]], log2transform=TRUE, method='density') +
     theme_biomasslmb() +
     xlab('PSM abundance (log2)') +
@@ -280,13 +316,15 @@ For PSM to protein summarisation with TMT quantification, simply summing togethe
 
 ```{r, fig.height=7, fig.width=7, warning=FALSE, message=FALSE}
 plot_missing_upset(obj = qfs$total, i='psm_filtered_norm')
-  
+
 nNA(qfs$total, i=names(qfs$total)[grepl('_norm', names(qfs$total))])$nNA %>%
   data.frame() %>% knitr::kable()
 
 nNA(qfs$phospho, i=names(qfs$phospho)[grepl('_norm', names(qfs$phospho))])$nNA %>%
   data.frame() %>% knitr::kable()
 ```
+
+Below, we remove PSMs with more than one missing value (out of 6 samples), then impute the small remaining fraction of missing values using `MinProb` (which draws imputed values from the low-abundance tail of the observed distribution, appropriate for values missing because they fell below the limit of detection), so that every retained PSM has a complete set of 6 abundance values ready for summation. A fixed random seed is set beforehand since the imputation involves random draws.
 
 ```{r}
 set.seed(42)
@@ -299,16 +337,16 @@ for(qf in names(qfs)){
   # Remove PSMs with > 1 missing values
   qfs[[qf]][[out_assay_name]] <- QFeatures::filterNA(
     qfs[[qf]][[in_assay_name]], 1/6)
-  
+
   biomasslmb:::message_parse(rowData(qfs$total[[out_assay_name]]),
                              'Leading.razor.protein',
                              "Removing PSMs with excessive missing values")
-  
+
   # Check remaining missing values
   print(sprintf('Missing values in %s = %s %%',
           qf,
           round(100*mean(is.na(assay(qfs[[qf]][[out_assay_name]]))), 3)))
-  
+
   # Impute remaining missing values using MinProb. We log2-transform, impute, then back-transform
   qfs[[qf]][[out_assay_name]] <- logTransform(
     qfs[[qf]][[out_assay_name]], base=2)
@@ -321,14 +359,14 @@ for(qf in names(qfs)){
 ```
 
 
-Finally, we perform the summarisation.
+Finally, we perform the summarisation: total PSMs are summed to `Leading.razor.protein` (protein level), and phospho PSMs are summed to `prot_phos` (phosphosite level).
 
 ```{r, warning=FALSE, message=FALSE}
 for(qf in names(qfs)){
 
-  
+
   in_assay_name <- 'psm_filtered_forSum'
-                             
+
     if(qf=='total'){
       out_assay_name <- 'protein'
       group_col <- "Leading.razor.protein"
@@ -345,10 +383,10 @@ for(qf in names(qfs)){
 
   # Log2-transform the summarised abundances for downstream analysis
   qfs[[qf]][[out_assay_name]] <- logTransform(qfs[[qf]][[out_assay_name]], base=2)
-  
+
   qfs[[qf]][[out_assay_name]]
 }
-  
+
 ```
 
 A final check that that the summarised abundances look sensible
@@ -363,13 +401,13 @@ for(qf in names(qfs)){
     assay_name <- 'phosphopeptide'
     feature <- 'Phosphopeptide'
   }
-  
+
   p <- plot_quant(qfs[[qf]][[assay_name]], log2transform=FALSE, method='density') +
     theme_biomasslmb() +
     xlab(sprintf('%s abundance (log2)', feature)) +
     theme(legend.key.height=unit(3, 'mm')) +
     ggtitle(qf)
-  
+
   print(p)
 }
 
@@ -380,7 +418,7 @@ for(qf in names(qfs)){
 
 # Inspecting the number of peptides and proteins through the processing steps
 
-Now that we have performed all the filtering steps, it's helpful to visualise how many peptides/proteins were retained at each level of the processing. 
+Now that we have performed all the filtering steps, it's helpful to visualise how many peptides/proteins were retained at each level of the processing.
 
 ## Samples per PSM
 
@@ -389,7 +427,7 @@ We'll start by inspecting the number of peptides in each experiment. We set the 
 ```{r, fig.height=7, fig.width=7, message=FALSE, warning=FALSE}
 
 for(qf in names(qfs)){
-  
+
   rowvars <- c('Sequence', 'Modifications', 'Retention.time')
 
   if(qf=='total'){
@@ -407,17 +445,17 @@ for(qf in names(qfs)){
       'PSMs - filtered (co-isolation)' = 'psm_filtered_interference',
       'PSMs - filtered for summarisation' = 'psm_filtered_forSum')
   }
-    
+
   samples_present <- get_samples_present(qfs[[qf]][,,unname(rename_cols)],
                                          rowvars, rename_cols)
-  
+
   p <- plot_samples_present(samples_present, rowvars, breaks=seq(1,6,1)) +
     ylab('PSMs') + ggtitle(qf)
-    
+
   print(p)
 }
 
-  
+
 
 ```
 
@@ -430,12 +468,12 @@ We need to set the row variables to be just the `Leading.razor.protein` column s
 ```{r, fig.height=7, fig.width=7, message=FALSE, warning=FALSE}
 for(qf in names(qfs)){
   print(qf)
-  
+
   rowvars <- c('Leading.razor.protein')
 
     if(qf=='total'){
       feature <- 'Proteins'
-      
+
       rename_cols <- c(
         'PSMs - detected' = 'psm_raw',
         'PSMs - filtered (contaminants; quant)' = 'psm_filtered',
@@ -454,17 +492,15 @@ for(qf in names(qfs)){
           'Phosphopeptide' = 'phosphopeptide')
 
     }
-      
+
     samples_present <- get_samples_present(qfs[[qf]][,,unname(rename_cols)],
                                            rowvars, rename_cols)
-    
+
     p <- plot_samples_present(samples_present, rowvars, breaks=seq(1,6,1)) +
       ylab(feature) + ggtitle(qf)
-      
+
     print(p)
   }
-
-  
 
 
 
@@ -488,7 +524,7 @@ Save the protein quantification in wide format
 
 ```{r}
 
-protein_wide_format <- assay(qfs$total[['protein']]) 
+protein_wide_format <- assay(qfs$total[['protein']])
 
 # Set column names to be condition_replicate
 colnames(protein_wide_format) <- sprintf(
@@ -514,7 +550,7 @@ We will also want the quantification in 'tidy' (long) form in a data.frame for p
 ```{r, warning=FALSE, message=FALSE}
 
 # Given a QFeatues, with protein level abundances,
-# condition and cell line colVars and 
+# condition and cell line colVars and
 # Master.Protein.gene.name, Master.Protein.long.name and
 # Master.Protein.Descriptions Rowvars, return the abundances in a long format
 # data.frame
@@ -523,17 +559,17 @@ get_long_format_exp <- function(
     colvars=c('condition', 'replicate'),
     rowvars=c('Leading.razor.protein', 'Protein.names.y',
               'Gene.Names', 'Gene.Names.First')){
-  
+
   long_format_protein <- biomasslmb:::qfeatures_long(
     obj,
-    colvars=colvars, 
+    colvars=colvars,
     rowvars=rowvars) %>%
     data.frame() %>%
     select(rowname,
            abundance=value,
            all_of(colvars),
            all_of(rowvars))
-  
+
   return(long_format_protein)
 
 }
@@ -570,7 +606,7 @@ write.table(file = here('results/PROTAC_long_format_phospho.tsv'),
 ```
 # Normalising phosphoproteomics to protein abundances
 
-Below, we create a long format data.frame containing the phosphopeptide abundances normalised to the corresponding protein abundance.
+Below, we create a long format data.frame containing the phosphopeptide abundances normalised to the corresponding protein abundance. This join is an inner join on `UniprotID`/condition/replicate: a phosphopeptide is only retained here if its parent protein also passed the total-proteome filtering above, since the normalised value requires both quantities. The normalised value (`abundance_phosphopeptide_prot_norm`) is the phosphopeptide abundance minus its parent protein abundance on the log2 scale — i.e. phosphorylation level *relative to* protein level — and is the quantity used in notebook 4's statistical testing to isolate genuine phosphorylation changes from changes that are simply a consequence of altered protein abundance.
 
 ```{r}
 long_format_phosphopeptide_norm_to_protein <- long_format_protein %>%
@@ -593,7 +629,7 @@ long_format_phosphopeptide_norm_to_protein %>%
 write.table(file = here('results/PROTAC_long_format_phosphopeptide_norm_to_protein.tsv'),
             quote=FALSE, row.names=FALSE, sep='\t')
 
-  
+
 long_long_format_phosphopeptide_norm_to_protein <- long_format_phosphopeptide_norm_to_protein %>%
   pivot_longer(cols=matches('abundance'), names_to='type', values_to='abundance') %>%
   mutate(type=gsub('abundance.', '', type)) %>%
@@ -606,6 +642,8 @@ saveRDS(long_long_format_phosphopeptide_norm_to_protein,
 ```
 
 
+
+# Session info
 
 ```{r}
 sessionInfo()

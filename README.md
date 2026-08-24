@@ -1,6 +1,6 @@
 # PER2-HALO and PER2-PROTAC proteomics data analysis
 
-Analysis of a PER2-HALO experiment to determine if PER2 interacts with mTORC1 and a PER2-PROTAC experiment to see if degradation of PER2 impacts components of mTORC1
+Analysis of a PER2-HALO experiment to determine if PER2 interacts with mTORC1 and a PER2-PROTAC experiment to see if degradation of PER2 impacts mTORC1 signalling
 
 
 ## Directory structure:
@@ -8,6 +8,14 @@ Analysis of a PER2-HALO experiment to determine if PER2 interacts with mTORC1 an
 - notebooks: R markdown notebooks for all analysis. Run in denoted order.
 - results: Output from analysis notebooks
 - external: Data external to project required for analysis
+
+## Running the notebooks
+Notebooks must be run in numerical order (`0_...` to `4_...`). Notebook
+`0_get_annotations.rmd` must be run first: it downloads UniProt protein
+details and GO annotations to `external/`, which notebooks 1-4 all depend on.
+Since files in `external/` are not stored in the repository (see
+`external/README`), they will not exist on a fresh clone until notebook 0 has
+been run at least once. Notebook 0 requires network access.
 
 ## Dependencies for R markdown notebooks:
 All the dependencies are R packages.\

@@ -82,6 +82,24 @@ Columns:
 
 ---
 
+### PROTAC_long_format_phosphopeptide_norm_to_protein.tsv
+Phosphopeptide abundance data in long format, alongside the matched protein abundance and the phosphopeptide abundance normalised to (i.e. offset by) protein abundance, for the same UniprotID/condition/replicate. This normalised value only accounts for changes in protein abundance and does not include the moderated statistics used for `PROTAC_phospho_limma_results.tsv`.
+
+Columns:
+- **UniprotID**
+- **phosphopeptide**: UniProt ID concatenated with phosphosite(s)
+- **ptm_positions_prot**: Phosphosite position(s) on the protein; NA if positions could not be determined
+- **Gene.Names**: All gene names
+- **Gene.Names.First**: First gene name, usually the canonical gene name
+- **Protein.names**: Protein description from UniProt
+- **condition**: PROTAC or DMSO
+- **replicate**: Replicate number (1–3)
+- **abundance.protein**: Log2-transformed protein abundance
+- **abundance.phosphopeptide**: Log2-transformed phosphopeptide abundance
+- **abundance_phosphopeptide_prot_norm**: Phosphopeptide abundance normalised to protein abundance (`abundance.phosphopeptide` - `abundance.protein`)
+
+---
+
 ### PROTAC_phospho_limma_results.tsv
 Summary of statistical testing for differences in phosphorylation abundance between PROTAC and DMSO conditions. Statistical testing was performed using *limma*, an extension of linear modeling. The test uses moderated statistics that borrow information across sites to reduce false positives and false negatives. Positive fold changes indicate higher phosphorylation in PROTAC relative to DMSO.
 
