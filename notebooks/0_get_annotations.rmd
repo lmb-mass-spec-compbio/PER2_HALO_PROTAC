@@ -60,6 +60,13 @@ all_proteins <- maxQuant_outfiles %>% lapply(function(x){
   unlist() %>% unique()
 }) %>% unlist() %>% unique()
 
+# Notebook 1 overrides `Leading.razor.protein` to the PER2 UniProt accession
+# (`O15055`) for peptides shared between the PER2-HALO fusion and endogenous
+# PER2, since MaxQuant itself never assigns O15055 as the leading razor
+# protein. We add it here explicitly so it is still annotated even though it
+# never appears in the raw `Leading.razor.protein` column.
+all_proteins <- union(all_proteins, 'O15055')
+
 length(all_proteins)
 ```
 

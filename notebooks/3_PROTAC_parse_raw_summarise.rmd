@@ -167,7 +167,6 @@ qfs <- lapply(qfs, function(x) x[,colData(x)$genotype =='P2H'])
 We first perform routine filtering to remove PSMs that:
 
 - Could originate from contaminants. See `?filter_features` for further details, including the removal of 'associated cRAP'.
-- Don't have a unique master protein.
 
 ```{r}
 for(qf in names(qfs)){
@@ -180,7 +179,7 @@ for(qf in names(qfs)){
     contaminant_proteins=contaminant_proteins,
     filter_contaminant=TRUE,
     filter_associated_contaminant=TRUE,
-    unique_master=TRUE)
+    unique_master=FALSE)
 
   if(qf == 'total'){
     qfs[[qf]] <- filterFeatures(qfs[[qf]], i=out_assay_name, ~ Q.value <= 0.01)
